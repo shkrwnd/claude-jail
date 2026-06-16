@@ -1,0 +1,33 @@
+# Environment
+.env
+
+# Client-specific workspace mounts (local paths, never commit)
+docker-compose.override.yml
+**/docker-compose.override.yml
+
+# Workspace
+workspace/
+**/workspace/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# Docker
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

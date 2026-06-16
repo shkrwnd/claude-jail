@@ -1,0 +1,26 @@
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir pytest
+
+# Copy project
+COPY sdk/ /opt/outhora/sdk/
+COPY wrappers/ /opt/outhora/bin/
+COPY tests/ /opt/outhora/tests/
+
+RUN chmod +x /opt/outhora/bin/*
+
+ENV PYTHONPATH="/opt/outhora"
+ENV PATH="/opt/outhora/bin:${PATH}"
+
+WORKDIR /opt/outhora
+
+# Run as non-root
+RUN groupadd -r testuser && useradd -r -g testuser -s /bin/bash testuser
+USER testuser
+
+CMD ["pytest", "tests/test_sdk.py", "-v"]

@@ -1,0 +1,66 @@
+services:
+  claude:
+    # Your existing Claude Code image — do NOT change this.
+    # The example below shows how to layer Outhora on top.
+    build:
+      context: ..
+      dockerfile: examples/Dockerfile.integration
+
+    environment:
+      # Outhora configuration
+      OUTHORA_API_URL: https://api.outhora.com
+      OUTHORA_AGENT_ID: ${OUTHORA_AGENT_ID}
+      OUTHORA_AGENT_SECRET: ${OUTHORA_AGENT_SECRET}
+      OUTHORA_DEPT_ID: ${OUTHORA_DEPT_ID}
+      OUTHORA_USER_ID: ${OUTHORA_USER_ID:-developer}
+      OUTHORA_SESSION_ID: ${OUTHORA_SESSION_ID:-}
+
+      # Claude Code
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+
+      # Ensure wrappers take precedence
+      PATH: /opt/outhora/bin:/usr/local/bin:/usr/bin:/bin
+
+    stdin_open: true
+    tty: true
+    command: /bin/bash
+
+    volumes:
+      # Mount workspace only — NO credential files
+      # Set WORKSPACE_DIR in your .env or shell to point to any folder on the host
+      - ${WORKSPACE_DIR:-../../workspace}:/workspace:rw
+      # Persist Claude Code auth and gh config across container restarts
+      - outhora-home:/home/outhora
+
+    working_dir: /workspace
+
+    # Resources
+    mem_limit: 4g
+    memswap_limit: 4g
+
+    # Security hardening
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE        # allows tools to write config files as non-root
+      - SETUID
+      - SETGID
+      - CHOWN
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:unconfined   # temporarily unconfined to diagnose syscall blocks
+    read_only: false
+    tmpfs:
+      - /tmp:nosuid,size=256m              # removed noexec — gh/claude need to execute from /tmp
+
+    # Network: allow outbound to Outhora and required services only
+    networks:
+      - outhora-net
+
+networks:
+  outhora-net:
+    driver: bridge
+
+volumes:
+  outhora-home:

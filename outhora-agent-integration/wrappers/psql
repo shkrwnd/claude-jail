@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Outhora wrapper for psql (PostgreSQL)
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/outhora-common.sh"
+
+TOOL="psql"
+COMMAND="psql $*"
+REAL_BINARY=$(outhora_find_real_binary "$TOOL")
+
+# 1. Authorize
+action_response=$(outhora_authorize "$TOOL" "$COMMAND")
+outhora_handle_decision "$action_response"
+
+# 2. Execute
+APPROVAL_TOKEN=$(outhora_get_approval_token "$action_response")
+
+exit_code=0
+"$REAL_BINARY" "$@" || exit_code=$?
+
+exit "$exit_code"

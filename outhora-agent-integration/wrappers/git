@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Outhora wrapper for git
+# Intercepts git commands for authorization and audit logging.
+# No credential injection — git uses SSH/HTTPS configured in the repo.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/outhora-common.sh"
+
+TOOL="git"
+COMMAND="git $*"
+REAL_BINARY=$(outhora_find_real_binary "$TOOL")
+
+# Set OUTHORA_DEBUG=1 to see what's happening behind the scenes
+_debug() { [[ "${OUTHORA_DEBUG:-0}" == "1" ]] && echo "[outhora] $*" >&2 || true; }
+
+_debug "Getting agent token..."
+_debug "Authorizing: ${COMMAND}"
+
+# 1. Authorize
+action_response=$(outhora_authorize "$TOOL" "$COMMAND")
+
+_debug "Outhora response: ${action_response}"
+
+outhora_handle_decision "$action_response"
+
+_debug "Authorized. Executing: ${REAL_BINARY} $*"
+
+# 2. Execute (no credential injection for git)
+exit_code=0
+"$REAL_BINARY" "$@" || exit_code=$?
+
+_debug "Done. Exit code: ${exit_code}"
+
+exit "$exit_code"

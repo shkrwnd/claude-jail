@@ -1,0 +1,24 @@
+# Client workspace configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Copy this file to docker-compose.override.yml and add the folders you want
+# Claude Code to access. Docker Compose merges it automatically with the base
+# docker-compose.example.yml — no need to edit that file.
+#
+# Usage:
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+#   # edit docker-compose.override.yml with your paths
+#   docker compose --env-file ../.env \
+#     -f examples/docker-compose.example.yml \
+#     -f examples/docker-compose.override.yml \
+#     up -d
+#
+# Inside the container all folders appear under /workspace/<name>.
+# Use :ro (read-only) for folders Claude should read but not modify.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  claude:
+    volumes:
+      - /path/to/your/project:/workspace/project:rw
+      - /path/to/another/repo:/workspace/another-repo:rw
+      - /path/to/docs:/workspace/docs:ro
