@@ -44,11 +44,15 @@ OUTHORA_TOKEN=$(outhora_get_token)
 outhora_authorize() {
     local tool="$1"
     local command="$2"
+    local reason="${3:-}"
 
     # Derive action_type as {tool}_{first_subcommand}
     local subcommand
     subcommand=$(echo "$command" | tr ' ' '\n' | grep -v '^-' | sed -n '2p')
     local action_type="${tool}${subcommand:+_${subcommand}}"
+
+    # Use OUTHORA_REASON env var if set (Claude sets this to explain intent)
+    local intent="${reason:-${OUTHORA_REASON:-}}"
 
     local payload
     payload=$(python3 -c "
@@ -58,6 +62,7 @@ print(json.dumps({
     'context': {
         'tool': '${tool}',
         'command': sys.argv[1],
+        'reason': sys.argv[2],
         'agent_id': '${OUTHORA_AGENT_ID}',
         'dept_id': '${OUTHORA_DEPT_ID}',
         'user_id': '${OUTHORA_USER_ID}',
@@ -66,7 +71,7 @@ print(json.dumps({
         'branch': '$(/usr/bin/git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")',
     }
 }))
-" "$command")
+" "$command" "${intent}")
 
     [[ "${OUTHORA_DEBUG:-0}" == "1" ]] && echo "[outhora] Request body: ${payload}" >&2 || true
 
@@ -149,9 +154,52 @@ outhora_handle_decision() {
             echo "  Reason:     ${reason}" >&2
             echo "  Review at:  ${OUTHORA_API_URL}/approvals/${request_id}" >&2
             echo "" >&2
-            echo "  The command will not be executed until approved." >&2
+            echo "  Waiting for approval (Ctrl+C to cancel)..." >&2
             echo "" >&2
-            exit 2
+
+            # Poll until approved or rejected
+            local poll_interval=5
+            local poll_response poll_status
+            while true; do
+                sleep "$poll_interval"
+                poll_response=$(curl -s \
+                    --max-time 10 \
+                    -H "Authorization: Bearer ${OUTHORA_TOKEN}" \
+                    -H "User-Agent: outhora-wrapper/1.0" \
+                    "${OUTHORA_API_URL}/v1/actions/${request_id}"
+                )
+                poll_status=$(echo "$poll_response" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','pending'))")
+
+                case "$poll_status" in
+                    approved)
+                        echo "  ✓ Approved. Executing..." >&2
+                        # Update action_response so caller can get approval_token
+                        action_response="$poll_response"
+                        return 0
+                        ;;
+                    rejected|denied)
+                        local poll_reason
+                        poll_reason=$(outhora_get_reason "$poll_response")
+                        echo "DENIED by Outhora: ${poll_reason:-rejected by approver}" >&2
+                        exit 1
+                        ;;
+                    failed)
+                        local poll_reason
+                        poll_reason=$(outhora_get_reason "$poll_response")
+                        echo "ERROR: Outhora action failed: ${poll_reason:-unknown error}" >&2
+                        echo "  Full response: ${poll_response}" >&2
+                        exit 1
+                        ;;
+                    pending|escalated)
+                        echo "  Still waiting..." >&2
+                        ;;
+                    *)
+                        echo "ERROR: Unexpected status while polling: ${poll_status}" >&2
+                        echo "  Response: ${poll_response}" >&2
+                        exit 1
+                        ;;
+                esac
+            done
             ;;
         *)
             echo "ERROR: Unknown status: ${status}" >&2

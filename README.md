@@ -98,7 +98,7 @@ Agent          Wrapper        Outhora API        Approver
 Copy the example and fill in your values:
 
 ```bash
-cp outhora-agent-integration/examples/.env.example .env
+cp outhora-agent-integration/deploy/.env.example .env
 ```
 
 ```bash
@@ -133,7 +133,7 @@ Obtain your agent ID, secret, and dept ID from [app.outhora.com](https://app.out
 By default the container mounts one folder as `/workspace`. To give Claude Code access to multiple folders, create an override file:
 
 ```bash
-cp examples/docker-compose.override.example.yml examples/docker-compose.override.yml
+cp deploy/docker-compose.override.example.yml deploy/docker-compose.override.yml
 # edit docker-compose.override.yml with your actual paths
 ```
 
@@ -154,12 +154,12 @@ Inside the container, Claude sees all your folders under `/workspace/`.
 cd outhora-agent-integration
 
 # Without override (single workspace folder from .env WORKSPACE_DIR)
-docker compose --env-file ../.env -f examples/docker-compose.example.yml up -d --build
+docker compose --env-file ../.env -f deploy/docker-compose.example.yml up -d --build
 
 # With override (multiple workspace folders)
 docker compose --env-file ../.env \
-  -f examples/docker-compose.example.yml \
-  -f examples/docker-compose.override.yml \
+  -f deploy/docker-compose.example.yml \
+  -f deploy/docker-compose.override.yml \
   up -d --build
 ```
 
@@ -168,7 +168,7 @@ This builds an image with Node.js, Claude Code CLI, Python, and the Outhora wrap
 ### 3. Shell in and use Claude Code
 
 ```bash
-docker compose -f examples/docker-compose.example.yml exec claude bash
+docker compose -f deploy/docker-compose.example.yml exec claude bash
 
 # Inside the container
 claude
@@ -256,7 +256,7 @@ All credentials come from Outhora's temporary credential API.
 
 ### Non-Root Execution
 
-Containers should run as a non-root user. See `examples/Dockerfile.integration`.
+Containers should run as a non-root user. See `deploy/Dockerfile.integration`.
 
 ## Example Policies
 
@@ -350,7 +350,7 @@ outhora-agent-integration/
 │   ├── kubectl            # kubectl wrapper
 │   ├── terraform          # Terraform wrapper
 │   └── psql               # PostgreSQL wrapper
-├── examples/
+├── deploy/
 │   ├── docker-compose.example.yml
 │   ├── Dockerfile.integration
 │   └── .env.example

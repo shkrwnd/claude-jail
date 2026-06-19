@@ -59,8 +59,22 @@ def inject_psql_credentials(creds: CredentialResponse, env: dict[str, str]) -> d
     return env
 
 
+def inject_az_credentials(creds: CredentialResponse, env: dict[str, str]) -> dict[str, str]:
+    """Inject Azure temporary credentials into environment."""
+    if creds.extra.get("client_id"):
+        env["AZURE_CLIENT_ID"] = creds.extra["client_id"]
+    if creds.extra.get("client_secret"):
+        env["AZURE_CLIENT_SECRET"] = creds.extra["client_secret"]
+    if creds.extra.get("tenant_id"):
+        env["AZURE_TENANT_ID"] = creds.extra["tenant_id"]
+    if creds.extra.get("subscription_id"):
+        env["AZURE_SUBSCRIPTION_ID"] = creds.extra["subscription_id"]
+    return env
+
+
 CREDENTIAL_INJECTORS = {
     "aws": inject_aws_credentials,
+    "az": inject_az_credentials,
     "gh": inject_gh_credentials,
     "kubectl": inject_kubectl_credentials,
     "terraform": inject_terraform_credentials,

@@ -8,8 +8,8 @@
 #   cp docker-compose.override.example.yml docker-compose.override.yml
 #   # edit docker-compose.override.yml with your paths
 #   docker compose --env-file ../.env \
-#     -f examples/docker-compose.example.yml \
-#     -f examples/docker-compose.override.yml \
+#     -f deploy/docker-compose.example.yml \
+#     -f deploy/docker-compose.override.yml \
 #     up -d
 #
 # Inside the container all folders appear under /workspace/<name>.

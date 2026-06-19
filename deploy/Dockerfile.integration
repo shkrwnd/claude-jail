@@ -11,12 +11,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Azure CLI
+RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install Claude Code globally
 RUN npm install -g @anthropic-ai/claude-code
 
-# Install Outhora wrappers
+# Install Outhora wrappers — read-only to prevent Claude from modifying them
 COPY wrappers/ /opt/outhora/bin/
-RUN chmod +x /opt/outhora/bin/*
+RUN chmod +x /opt/outhora/bin/* \
+    && chmod -w /opt/outhora/bin/* \
+    && chown -R root:root /opt/outhora/bin/
 
 # Install Outhora Python SDK
 COPY sdk/ /opt/outhora/sdk/

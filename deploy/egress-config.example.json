@@ -1,0 +1,35 @@
+{
+  "_comment": "Copy this file to egress-config.json and edit to suit your environment.",
+
+  "log_allowed": true,
+  "log_blocked": true,
+  "block_all_others": true,
+
+  "allowed_domains": [
+    {
+      "domain": "api.anthropic.com",
+      "methods": ["GET", "POST"],
+      "note": "Claude API — required"
+    },
+    {
+      "domain": "pypi.org",
+      "methods": ["GET"],
+      "note": "Python packages — read only"
+    },
+    {
+      "domain": "files.pythonhosted.org",
+      "methods": ["GET"],
+      "note": "Python package downloads — read only"
+    },
+    {
+      "domain": "github.com",
+      "methods": ["GET"],
+      "note": "Read only — remove if you don't need git clone"
+    },
+    {
+      "domain": "api.github.com",
+      "methods": ["GET"],
+      "note": "Read only — remove if you don't use gh CLI"
+    }
+  ]
+}

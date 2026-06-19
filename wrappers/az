@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Outhora wrapper for Azure CLI
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/outhora-common.sh"
+
+TOOL="az"
+COMMAND="az $*"
+REAL_BINARY=$(outhora_find_real_binary "$TOOL")
+
+# az login requires interactive browser auth — pass through directly, no Outhora gate needed
+if [[ "${1:-}" == "login" || "${1:-}" == "logout" ]]; then
+    exec "$REAL_BINARY" "$@"
+fi
+
+# 1. Authorize
+action_response=$(outhora_authorize "$TOOL" "$COMMAND")
+outhora_handle_decision "$action_response"
+
+# 2. Execute (approval_token available if needed for audit trail)
+APPROVAL_TOKEN=$(outhora_get_approval_token "$action_response")
+
+exit_code=0
+"$REAL_BINARY" "$@" || exit_code=$?
+
+exit "$exit_code"

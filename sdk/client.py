@@ -1,4 +1,4 @@
-"""Main Outhora SDK client."""
+"""Outhora ACP client — mirrors the acp_submit_action / acp_get_action_status contract."""
 
 from __future__ import annotations
 
@@ -8,16 +8,8 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from sdk.auth import (
-    exchange_token,
-    get_agent_id,
-    get_agent_secret,
-    get_api_url,
-    get_dept_id,
-    get_session_id,
-    get_user_id,
-)
-from sdk.models import ActionRequest, ActionResponse, ActionStatus
+from sdk.auth import exchange_token, get_api_url, get_dept_id, get_session_id, get_user_id
+from sdk.models import ActionRequest, ActionResponse, ActionStatus, CredentialResponse
 
 logger = logging.getLogger("outhora.client")
 
@@ -27,25 +19,24 @@ class OuthoraError(Exception):
 
 
 class ActionDenied(OuthoraError):
-    """Raised when an action is denied by policy."""
+    """Raised when an action is rejected by policy."""
 
     def __init__(self, reason: str = "") -> None:
         self.reason = reason
-        super().__init__(f"Action denied: {reason}" if reason else "Action denied by policy")
+        super().__init__(f"Action rejected: {reason}" if reason else "Action rejected by policy")
 
 
 class ApprovalRequired(OuthoraError):
-    """Raised when an action requires human approval."""
+    """Raised when a human must approve before the action can proceed."""
 
-    def __init__(self, request_id: str, approver: str = "", reason: str = "") -> None:
+    def __init__(self, request_id: str, approver: str = "") -> None:
         self.request_id = request_id
         self.approver = approver
-        self.reason = reason
-        super().__init__(f"Approval required from {approver}. Reason: {reason}")
+        super().__init__(f"Approval required (request_id={request_id}, approver={approver})")
 
 
 class OuthoraClient:
-    """Client for the Outhora authorization API."""
+    """Client for the Outhora AI Control Plane."""
 
     def __init__(
         self,
@@ -55,16 +46,21 @@ class OuthoraClient:
         dept_id: str | None = None,
         user_id: str | None = None,
         session_id: str | None = None,
+        # api_key bypasses token exchange — for tests only
+        api_key: str | None = None,
     ) -> None:
-        self._api_url = api_url or get_api_url()
-        self._agent_id = agent_id or get_agent_id()
-        self._agent_secret = agent_secret or get_agent_secret()
+        self._api_url = (api_url or get_api_url()).rstrip("/")
+        self._agent_id = agent_id
+        self._agent_secret = agent_secret
         self._dept_id = dept_id or get_dept_id()
         self._user_id = user_id or get_user_id()
         self._session_id = session_id or get_session_id()
+        self._api_key = api_key
         self._token: str | None = None
 
     def _get_token(self) -> str:
+        if self._api_key:
+            return self._api_key
         if not self._token:
             self._token = exchange_token()
         return self._token
@@ -90,74 +86,59 @@ class OuthoraClient:
             raise OuthoraError(f"Network error: {e}") from e
 
     def health_check(self) -> bool:
-        """Check connectivity to Outhora API (no auth required)."""
+        """Check connectivity to the Outhora API."""
         try:
-            url = f"{self._api_url}/health"
+            url = f"{self._api_url}/v1/health"
             req = urllib.request.Request(url, method="GET")
             with urllib.request.urlopen(req, timeout=10) as resp:
-                result = json.loads(resp.read().decode())
-                return result.get("status") == "ok"
+                return json.loads(resp.read().decode()).get("status") == "ok"
         except Exception:
             return False
 
-    def submit_action(
-        self,
-        tool: str,
-        command: str,
-        action_type: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> ActionResponse:
+    def submit_action(self, action_type: str, context: dict[str, Any]) -> ActionResponse:
         """Submit an action for authorization.
 
-        action_type defaults to '{tool}_{first_subcommand}', e.g. 'git_push'.
+        Returns ActionResponse with status: approved (+ approval_token) | rejected | pending (+ request_id).
+        The approval_token expires in 15 minutes and can only be used once — store it immediately.
         """
-        if not action_type:
-            parts = command.split()
-            subcommand = next((p for p in parts[1:] if not p.startswith("-")), "")
-            action_type = f"{tool}_{subcommand}" if subcommand else tool
-
-        request = ActionRequest(
-            action_type=action_type,
-            context={
-                "tool": tool,
-                "command": command,
-                "agent_id": self._agent_id,
-                "dept_id": self._dept_id,
-                "user_id": self._user_id,
-                "session_id": self._session_id,
-                **(metadata or {}),
-            },
-        )
+        request = ActionRequest(action_type=action_type, context={
+            "dept_id": self._dept_id,
+            "user_id": self._user_id,
+            "session_id": self._session_id,
+            **context,
+        })
         data = self._request("POST", "/v1/actions", request.to_dict())
         return ActionResponse.from_dict(data)
 
     def get_action_status(self, request_id: str) -> ActionResponse:
-        """Poll the status of a pending action."""
+        """Poll the status of a pending action. Call after receiving status=pending."""
         data = self._request("GET", f"/v1/actions/{request_id}")
         return ActionResponse.from_dict(data)
 
+    def get_temporary_credentials(self, tool: str, approval_token: str) -> CredentialResponse:
+        """Fetch short-lived credentials using an approval token."""
+        data = self._request("POST", "/v1/credentials", {
+            "tool": tool,
+            "approval_token": approval_token,
+        })
+        return CredentialResponse.from_dict(data)
+
     def execute_authorized(
         self,
-        tool: str,
-        command: str,
-        action_type: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        action_type: str,
+        context: dict[str, Any],
     ) -> ActionResponse:
         """Submit action and handle the decision.
 
-        Returns the ActionResponse (with approval_token if approved).
-        Raises ActionDenied or ApprovalRequired as appropriate.
+        Returns ActionResponse (with approval_token) if approved.
+        Raises ActionDenied if rejected, ApprovalRequired if pending human approval.
         """
-        response = self.submit_action(tool, command, action_type, metadata)
+        resp = self.submit_action(action_type, context)
 
-        if response.status in (ActionStatus.DENIED, ActionStatus.REJECTED):
-            raise ActionDenied(response.reason)
+        if resp.status == ActionStatus.REJECTED:
+            raise ActionDenied(resp.reason)
 
-        if response.status == ActionStatus.PENDING:
-            raise ApprovalRequired(
-                request_id=response.request_id,
-                approver=response.approver,
-                reason=response.reason,
-            )
+        if resp.status == ActionStatus.PENDING:
+            raise ApprovalRequired(request_id=resp.request_id, approver=resp.approver)
 
-        return response
+        return resp
