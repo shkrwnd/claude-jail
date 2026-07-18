@@ -303,7 +303,7 @@ Every tool invocation — whether allowed, denied, or pending approval — produ
        │  │   "tool":      "aws",                   │
        │  │   "command":   "aws s3 ls s3://bucket",  │
        │  │   "decision":  "allow",                  │
-       │  │   "user_id":   "dev-shikhartiwari",     │
+       │  │   "user_id":   "dev-alice",     │
        │  │   "agent_session_id": "sess-abc123",    │
        │  │   "action_id": "act-456",               │
        │  │   "exit_code": 0                        │

@@ -10,12 +10,12 @@ echo "=== Building test container ==="
 docker build -t outhora-test -f "${SCRIPT_DIR}/Dockerfile.test" "$PROJECT_DIR"
 
 echo ""
-echo "=== Running Python SDK tests ==="
+echo "=== Running Python tests ==="
 docker run --rm \
     --cap-drop ALL \
     --security-opt no-new-privileges:true \
     outhora-test \
-    pytest tests/test_sdk.py -v
+    pytest tests/test_exec_client.py tests/test_auth_backends.py tests/test_outhora.py -v
 
 echo ""
 echo "=== Running wrapper integration tests ==="

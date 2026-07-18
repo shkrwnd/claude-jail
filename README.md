@@ -1,4 +1,4 @@
-# Outhora Agent Integration Layer
+# Claude Jail
 
 Authorization, approval workflows, temporary credentials, and audit logging for Claude Code and other coding agents running in Docker containers.
 
@@ -11,353 +11,232 @@ Docker containers provide process and filesystem isolation, but they do not prov
 - **Temporary credentials** — static credentials mounted into containers persist beyond need and can be exfiltrated
 - **Audit logging** — no centralized record of what an agent executed, when, and why
 
-Outhora bridges this gap by intercepting tool calls at the CLI level, routing them through a policy engine, and issuing short-lived credentials only when authorized.
+This project bridges the gap by intercepting tool calls at the CLI level, routing them through a pluggable authorization backend, and executing commands on the host where credentials live. No secrets ever enter the container.
 
 ## Architecture
 
 ```
-Claude Code (inside Docker)
-       │
-       ▼
-┌──────────────────────┐
-│  Outhora CLI Wrapper  │  ← intercepts aws, gh, kubectl, terraform, psql
-│  (bash scripts)       │
-└──────┬───────────────┘
-       │
-       ▼
-┌──────────────────────┐
-│  Outhora Python SDK   │  ← HTTP calls to Outhora API
-└──────┬───────────────┘
-       │
-       ▼
-┌──────────────────────┐
-│  https://app.outhora  │  ← hosted policy engine, approval UI, audit store
-│  .com                 │
-└──────┬───────────────┘
-       │
-       ▼
-┌──────────────────────────────────────────┐
-│  Decision: allow / deny / approval_required │
-│  + Temporary Credentials (if allowed)        │
-└──────────────────────────────────────────┘
-       │
-       ▼
-   Tool Execution
+CONTAINER (untrusted)                         HOST (trusted)
+┌──────────────────────────┐                 ┌──────────────────────────────┐
+│ Claude Code                │                 │ Execution Server              │
+│   ↓                        │                 │  (server/main.py)             │
+│ CLI Wrapper (aws/gh/git..) │                 │                               │
+│   ↓                        │                 │  1. Verify shared token       │
+│ agent-exec                 │                 │  2. Auth backend (pluggable)  │
+│   ↓                        │  localhost TCP  │  3. Fetch temp credentials    │
+│ exec_client.py ────────────┼────────────────▶│  4. Execute real binary       │
+│                            │                 │  5. Return stdout/stderr      │
+│ Never sees:                │◀────────────────┤                               │
+│  - credentials             │  {stdout,stderr │ Reads: server.env             │
+│  - approval tokens         │   exit_code}    │ (auth backend credentials)    │
+│  - auth backend config     │                 │                               │
+└──────────────────────────┘                 └──────────────────────────────┘
 ```
 
-## Sequence Diagrams
-
-### Allow Flow
-
-```
-Agent          Wrapper        Outhora API
-  │               │               │
-  │── aws s3 ls ──▶               │
-  │               │── authorize ──▶
-  │               │◀── allow ─────│
-  │               │── get creds ──▶
-  │               │◀── temp creds─│
-  │               │               │
-  │               │── exec aws ───│
-  │               │               │
-  │               │── audit ──────▶
-  │◀── output ────│               │
-```
-
-### Deny Flow
-
-```
-Agent          Wrapper        Outhora API
-  │               │               │
-  │── tf destroy ─▶               │
-  │               │── authorize ──▶
-  │               │◀── deny ──────│
-  │◀── DENIED ────│               │
-```
-
-### Approval Required Flow
-
-```
-Agent          Wrapper        Outhora API        Approver
-  │               │               │                  │
-  │── tf apply ───▶               │                  │
-  │               │── authorize ──▶                  │
-  │               │◀── approval ──│                  │
-  │               │   required    │                  │
-  │◀── URL ───────│               │                  │
-  │  (exit 2)     │               │                  │
-  │               │               │◀── approve ──────│
-  │               │               │                  │
-  │ (retry later) │               │                  │
-```
-
-## Installation
-
-### 1. Create your `.env` file
-
-Copy the example and fill in your values:
+## Quick Start
 
 ```bash
-cp outhora-agent-integration/deploy/.env.example .env
+./start.sh        # starts the execution server, builds/starts the container, opens a shell
+./start.sh stop   # tears everything down
+./start.sh logs   # tail the execution server log
 ```
 
-```bash
-# Required
-OUTHORA_API_URL=https://api.outhora.com
-OUTHORA_AGENT_ID=your-agent-id
-OUTHORA_AGENT_SECRET=your-agent-secret
-OUTHORA_DEPT_ID=your-dept-id
+On first run the script creates all config files, starts the execution server on the host, builds/starts the container, and drops you into a container shell — just run `claude` there. It works exactly as it does locally: without an `ANTHROPIC_API_KEY` it prompts for browser login (the token persists in the `claude` volume), and any call to `aws`, `az`, `gh`, `git`, `kubectl`, `terraform`, or `psql` is automatically intercepted and routed through the execution server.
 
-# Optional
-OUTHORA_USER_ID=developer-id      # defaults to $USER
-OUTHORA_SESSION_ID=               # groups tool calls in the audit log
+## Configuration
 
-# Claude Code
-ANTHROPIC_API_KEY=your-anthropic-key
+All config lives in `deploy/`, auto-created on first run and never committed. Defaults live in the committed `deploy/*.defaults.env` files — don't edit those, override them in the files below.
 
-# Workspace folder mounted into the container as /workspace
-# Can be any absolute or relative path on the host
-# WORKSPACE_DIR=/Users/you/projects/myproject
-```
+| File | Contains |
+|---|---|
+| `deploy/docker-compose.override.yml` | Your workspace folders (see below) |
+| `deploy/container.env` | Optional `ANTHROPIC_API_KEY` (otherwise browser login on first run) |
+| `deploy/server.env` | Auth backend credentials — never enters the container. Default: `allow_all` (dev only) |
 
-Keep `.env` at the repo root and never commit it:
+### Workspace folders (the override file)
 
-```bash
-echo ".env" >> .gitignore
-```
+`docker-compose.override.yml` is Docker Compose's standard mechanism for local
+customization: compose merges it on top of the base `docker-compose.yml`, so
+the shared config stays in git while your machine-specific mounts live in the
+override (gitignored — your local paths are never committed). `start.sh`
+passes both files to compose automatically.
 
-Obtain your agent ID, secret, and dept ID from [app.outhora.com](https://app.outhora.com).
-
-### 2. Configure your workspace folders
-
-By default the container mounts one folder as `/workspace`. To give Claude Code access to multiple folders, create an override file:
-
-```bash
-cp deploy/docker-compose.override.example.yml deploy/docker-compose.override.yml
-# edit docker-compose.override.yml with your actual paths
-```
+By default the container mounts one folder as `/workspace`. To give Claude
+Code access to your folders, add volume lines to the override file. Each line
+means `host-path:container-path:mode`:
 
 ```yaml
 services:
   claude:
     volumes:
-      - /path/to/project:/workspace/project:rw
+      - /path/to/project:/workspace/project:rw        # rw: Claude can edit
       - /path/to/another-repo:/workspace/another-repo:rw
-      - /path/to/docs:/workspace/docs:ro   # read-only
+      - /path/to/docs:/workspace/docs:ro              # ro: read-only
 ```
+
+- **host path** (left) — the real folder on your machine
+- **container path** (right) — where it appears inside the jail; always under `/workspace/`
+- **mode** — `rw` lets Claude modify files, `ro` makes them read-only
 
 Inside the container, Claude sees all your folders under `/workspace/`.
+The execution server reads the same override file to map container paths
+back to host paths — so when Claude runs e.g. `git` in `/workspace/project`,
+the real command executes in `/path/to/project` on the host. No other
+configuration is needed.
 
-### 3. Build and start the container
+After editing any config, re-run `./start.sh` to apply it.
 
-```bash
-cd outhora-agent-integration
+## Inside the Container
 
-# Without override (single workspace folder from .env WORKSPACE_DIR)
-docker compose --env-file ../.env -f deploy/docker-compose.example.yml up -d --build
+What Claude actually gets is a deliberately minimal environment:
 
-# With override (multiple workspace folders)
-docker compose --env-file ../.env \
-  -f deploy/docker-compose.example.yml \
-  -f deploy/docker-compose.override.yml \
-  up -d --build
-```
+- **A non-root user** (`agent`, UID 1000) in a hardened container: all capabilities dropped, `no-new-privileges`, seccomp profile, memory/pid limits. No sudo, no way to escalate.
+- **Your workspace folders** under `/workspace/` — the only host filesystem it can touch, with exactly the read/write access you granted per folder.
+- **Claude Code + everyday dev tools** (node, python3) that run locally and freely — editing files, running tests, local builds all work at full speed with no interception.
+- **Wrappers instead of real CLIs**: `/opt/agent/bin` (root-owned, read-only) sits first on `PATH`, so `aws`, `az`, `gh`, `git`, `kubectl`, `terraform`, `psql` invoke thin shims that forward the command to the host. Claude Code needs no special configuration — interception is transparent, commands behave as if they ran locally.
+- **No secrets**: no cloud credentials, no SSH keys, no auth backend config anywhere in the image or environment. The only sensitive value is the exec token, which grants exactly one thing — the right to *ask* the host to run a command.
 
-This builds an image with Node.js, Claude Code CLI, Python, and the Outhora wrappers pre-installed.
-
-### 3. Shell in and use Claude Code
-
-```bash
-docker compose -f deploy/docker-compose.example.yml exec claude bash
-
-# Inside the container
-claude
-```
-
-Claude Code works exactly as it does locally. On first run it will prompt you to log in via the browser. After that, any call to `aws`, `gh`, `kubectl`, `terraform`, or `psql` is automatically intercepted by Outhora.
+The intent: **bypassing the sandbox must gain nothing.** If the agent deletes the wrappers or opens the TCP connection itself, it just reaches the same execution server, which authorizes on the host using policy the container cannot see or influence. There are no credentials inside to steal and no auth code inside to tamper with. Out of the box you get policy-checked, audit-logged tool execution with temporary credentials — without configuring Claude Code at all.
 
 ## How It Works
 
-### CLI Wrappers
+Each wrapper is a small script that delegates to `agent-exec`, which forwards the command to the host via localhost TCP (`exec_client.py`). The container knows nothing about authorization — it only speaks the execution protocol: send `{ tool, args, reason, repo, branch }`, receive `{ stdout, stderr, exit_code }`.
 
-Each wrapper (`aws`, `gh`, `git`, `kubectl`, `terraform`, `psql`) is a bash script that:
+The execution server on the host:
 
-1. Captures the full command
-2. Calls `POST /api/v1/authorize` with the command details
-3. Handles the decision:
-   - **allow** — proceeds to credential fetch and execution
-   - **deny** — prints reason and exits with code 1
-   - **approval_required** — prints approval URL and exits with code 2
-4. Fetches temporary credentials from `POST /api/v1/credentials`
-5. Injects credentials into environment variables (never written to disk)
-6. Executes the real binary
-7. Sends an audit event to `POST /api/v1/audit`
+1. Verifies the shared secret (`X-Exec-Token`, generated into `deploy/exec.token`)
+2. Maps the container workspace path back to the host path
+3. Authorizes via the pluggable auth backend
+4. On approval: fetches temporary credentials and executes the real binary
+5. On denial: returns an error message; the command never executes
+
+### Auth Backends
+
+The default backend is `allow_all` — every command is approved and runs with the host environment, no policy checks and no credential brokering. Fine for local development; for anything real, choose an authorization backend via `AUTH_BACKEND` in `deploy/server.env`. The container has no say in this, and switching backends never requires rebuilding the image:
+
+| Backend | Description |
+|---------|-------------|
+| `allow_all` | Approve everything — development and CI only (default) |
+| `webhook` | Generic HTTP webhook — any custom approval service |
+
+The server fails at startup with a clear error if the chosen backend is missing required credentials.
+
+### Writing a Custom Backend
+
+A backend is one class with one required method: `authorize()` receives the
+tool name, the full command string, and the raw args, and returns an
+`AuthDecision` — `"approved"` means the host executes the real binary,
+anything else means the container gets an error and nothing runs. Backends
+live only on the host, so the agent can neither read nor influence your
+policy.
+
+Here is a complete backend that enforces a static allow/deny list
+(`server/auth_backends/base.py` defines the interface):
+
+```python
+# server/auth_backends/static_policy.py
+from server.auth_backends.base import AuthBackend, AuthDecision
+
+ALLOWED = (
+    "git status", "git log", "git diff", "git commit",
+    "aws s3 ls",
+    "kubectl get",
+)
+DENIED = (
+    "git push --force",
+    "terraform destroy",
+    "kubectl delete",
+)
+
+class StaticPolicyBackend(AuthBackend):
+    def authorize(self, tool, command, args, reason="", repo="", branch="") -> AuthDecision:
+        if any(command.startswith(prefix) for prefix in DENIED):
+            return AuthDecision(status="denied", reason=f"{command!r} is on the deny list")
+        if any(command.startswith(prefix) for prefix in ALLOWED):
+            return AuthDecision(status="approved")
+        return AuthDecision(status="denied", reason=f"{command!r} is not on the allow list")
+```
+
+How it works:
+
+- `command` is the full string (e.g. `"git push --force origin main"`), so
+  prefix matching gives you simple subcommand-level rules.
+- Deny is checked **first**, and anything unlisted is denied — always fail
+  closed, so a command you never thought about cannot slip through.
+- The optional `execution_env(tool, decision)` method controls the
+  environment of the executed command; override it to inject temporary
+  credentials (the default passes the host environment through).
+
+Register it and select it in `deploy/server.env`:
+
+```python
+# in server/auth_backends/__init__.py
+REGISTRY["static_policy"] = "server.auth_backends.static_policy.StaticPolicyBackend"
+```
+
+```bash
+# deploy/server.env
+AUTH_BACKEND=static_policy
+```
+
+Restart the server (`./start.sh stop && ./start.sh`) — no container rebuild
+needed. A word of caution: prefix matching is a demonstration, not a security
+boundary — e.g. `git -c core.sshCommand=... push` doesn't start with
+`git push`, and `kubectl get` also matches `kubectl get secrets`. Robust
+policies must inspect `args`, not just the command string.
 
 ### Temporary Credentials
 
-Outhora never expects static credentials in the container. On each authorized action:
-
-- The wrapper requests short-lived credentials scoped to that specific action
-- Credentials are injected as environment variables for the subprocess only
-- No credential files are written to disk
-- Credentials expire automatically
-
-**Supported credential types:**
+No static credentials are mounted into the container. On each authorized action, the backend can inject short-lived credentials as environment variables for that subprocess only. How much of this happens depends on the configured backend: the default `allow_all` injects nothing (commands use the host environment as-is); a production backend fetches credentials scoped to the approved action:
 
 | Tool | Credentials |
 |------|------------|
 | aws | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` |
 | gh | `GH_TOKEN`, `GITHUB_TOKEN` |
-| git | None — uses SSH/HTTPS configured in the repo |
+| git | None — uses SSH/HTTPS configured on the host |
 | kubectl | `--token` flag, `--server` flag |
 | terraform | AWS env vars + `TF_TOKEN_app_terraform_io` |
 | psql | `PGPASSWORD`, `PGUSER`, `PGHOST`, `PGDATABASE` |
 
-### Audit Logging
-
-Every tool execution generates an audit event sent to Outhora:
-
-```json
-{
-  "timestamp": "2026-01-15T10:30:00Z",
-  "tool": "aws",
-  "command": "aws s3 ls",
-  "decision": "allow",
-  "agent_session_id": "sess-abc",
-  "user_id": "dev-1",
-  "exit_code": 0
-}
-```
-
-Audit submission uses fire-and-forget with 3 retries and exponential backoff. Audit failures never block tool execution.
-
 ## Security
 
-### Container Hardening
+- **Credential isolation** — the container image contains only the wrappers and the protocol client; auth backend selection and credentials live in `deploy/server.env` on the host, never mounted into the container
+- **Request authentication** — the server only accepts requests carrying the shared secret from `deploy/exec.token`; other processes or containers reaching `127.0.0.1:8377` are rejected
+- **Loopback only** — the server binds to 127.0.0.1; the container reaches it via `host.docker.internal`. Never exposed to the network
+- **Container hardening** — `cap_drop: ALL`, `no-new-privileges`, seccomp profile, memory/pid limits, non-root user (UID 1000)
+- **Never mount** `~/.aws`, `~/.ssh`, `~/.kube`, `~/.docker`, `~/.config/gh` — all credentials are managed by the execution server on the host
 
-```yaml
-cap_drop:
-  - ALL
-security_opt:
-  - no-new-privileges:true
-```
-
-### Do NOT Mount
-
-```
-~/.aws
-~/.ssh
-~/.kube
-~/.docker
-~/.config/gh
-```
-
-All credentials come from Outhora's temporary credential API.
-
-### Non-Root Execution
-
-Containers should run as a non-root user. See `deploy/Dockerfile.integration`.
-
-## Example Policies
-
-These are configured in Outhora (not enforced locally):
-
-| Action | Policy |
-|--------|--------|
-| `aws s3 ls` | Allow |
-| `gh pr view` | Allow |
-| `git status` | Allow |
-| `git log` | Allow |
-| `git commit` | Allow |
-| `kubectl get pods` | Allow |
-| `terraform plan` | Allow |
-| `git push` | Approval Required |
-| `gh pr merge` | Approval Required |
-| `terraform apply` | Approval Required |
-| `kubectl rollout restart` | Approval Required |
-| `git push --force` | Deny |
-| `terraform destroy` | Deny |
-| `kubectl delete namespace` | Deny |
-| `aws rds delete-db-instance` | Deny |
-| `aws iam delete-role` | Deny |
-
-## Python SDK
-
-For programmatic integration:
-
-```python
-from sdk.client import OuthoraClient, AuthorizationDenied, ApprovalRequired
-
-# Credentials from environment (OUTHORA_AGENT_ID, OUTHORA_AGENT_SECRET)
-client = OuthoraClient()
-
-# Or pass explicitly:
-# client = OuthoraClient(agent_id="your-id", agent_secret="your-secret")
-
-# Health check
-assert client.health_check()
-
-# Full authorization flow
-try:
-    auth_resp, creds = client.execute_authorized(
-        tool="aws",
-        command="aws s3 ls",
-    )
-    # creds.access_key, creds.secret_key, creds.session_token
-except AuthorizationDenied as e:
-    print(f"Denied: {e.reason}")
-except ApprovalRequired as e:
-    print(f"Approve at: {e.approval_url}")
-```
+Known gaps and planned mitigations are tracked in `TODO.md` (host-side execution hardening, egress enforcement).
 
 ## Testing
 
-All tests run inside Docker containers to match the production environment:
-
 ```bash
-# Run all tests (SDK + wrapper integration) inside Docker
-cd outhora-agent-integration
-./tests/run-tests.sh
+PYTHONPATH=. python3 -m unittest discover tests -v
 ```
-
-This builds a test container, then runs:
-1. **Python SDK unit tests** — model serialization, client flows, credential injection (uses an in-process mock HTTP server)
-2. **Wrapper integration tests** — authorization decisions, credential fetch, audit submission against a mock Outhora API
-
-## Future Integrations
-
-- **AWS STS** — Outhora can issue STS `AssumeRole` credentials scoped to specific actions
-- **GitHub App Tokens** — installation tokens with fine-grained permissions per repository
-- **Kubernetes Service Accounts** — short-lived tokens bound to specific namespaces and RBAC roles
-- **Database Credentials** — time-limited database users via Vault or native DB mechanisms
 
 ## Project Structure
 
 ```
-outhora-agent-integration/
-├── sdk/
-│   ├── __init__.py
-│   ├── client.py          # Main SDK client
-│   ├── auth.py            # Authentication helpers
-│   ├── credentials.py     # Credential injection per tool
-│   ├── audit.py           # Audit event submission with retries
-│   └── models.py          # Typed dataclass models
-├── wrappers/
-│   ├── outhora-common.sh  # Shared bash functions
-│   ├── aws                # AWS CLI wrapper
-│   ├── gh                 # GitHub CLI wrapper
-│   ├── git                # Git wrapper (no credential injection)
-│   ├── kubectl            # kubectl wrapper
-│   ├── terraform          # Terraform wrapper
-│   └── psql               # PostgreSQL wrapper
-├── deploy/
-│   ├── docker-compose.example.yml
-│   ├── Dockerfile.integration
-│   └── .env.example
+├── start.sh                   # One-command entry point: server + container + shell
+├── wrappers/                  # CONTAINER SIDE — the only code shipped into the image
+│   ├── agent-exec             # Dispatcher: forwards tool calls to the host
+│   ├── exec_client.py         # Protocol client: localhost TCP (stdlib-only)
+│   └── aws, az, gh, git, kubectl, terraform, psql   # CLI wrappers
+├── server/                    # HOST SIDE — auth, credentials, execution
+│   ├── main.py                # Execution server (localhost TCP listener, token auth)
+│   ├── handler.py             # Map paths → authorize → build env → run real binary
+│   ├── auth_backends/         # Pluggable authorization backends
+│   │   ├── base.py            # AuthBackend ABC + AuthDecision
+│   │   ├── allow_all.py       # Approve everything (dev/CI)
+│   │   └── webhook.py         # Generic HTTP webhook
+│   └── ...                    # Additional backend clients
+├── deploy/                    # Docker/compose/env config
+│   ├── docker-compose.yml     # Base compose config (hardening, mounts, env)
+│   ├── Dockerfile             # Agent container image
+│   ├── container.defaults.env # Committed container defaults (user overrides: container.env)
+│   ├── server.defaults.env    # Committed server defaults (user overrides: server.env)
+│   ├── docker-compose.override.example.yml  # Template for workspace mounts
+│   └── create-configs.sh      # Auto-creates missing user config files
 ├── tests/
-│   ├── Dockerfile.test    # Test container definition
-│   ├── run-tests.sh       # Entrypoint: builds and runs all tests in Docker
-│   ├── test_sdk.py        # Python unit tests with mock server
-│   └── test_wrappers.sh   # Bash integration tests
-└── README.md
+└── TODO.md                    # Known gaps: execution hardening, egress enforcement
 ```

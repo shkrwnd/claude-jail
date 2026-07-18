@@ -8,8 +8,8 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from sdk.auth import exchange_token, get_api_url, get_dept_id, get_session_id, get_user_id
-from sdk.models import ActionRequest, ActionResponse, ActionStatus, CredentialResponse
+from server.outhora.auth import exchange_token, get_api_url, get_dept_id, get_session_id, get_user_id
+from server.outhora.models import ActionRequest, ActionResponse, ActionStatus, CredentialResponse
 
 logger = logging.getLogger("outhora.client")
 

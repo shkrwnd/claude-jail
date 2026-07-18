@@ -1,24 +1,25 @@
-# Client workspace configuration
+# Workspace folders for Claude Code
 # ─────────────────────────────────────────────────────────────────────────────
-# Copy this file to docker-compose.override.yml and add the folders you want
-# Claude Code to access. Docker Compose merges it automatically with the base
-# docker-compose.example.yml — no need to edit that file.
+# Add the folders you want Claude Code to access as volumes below.
+# (This file is auto-created from the template by start.sh / create-configs.sh
+# and is never committed — your local paths stay on your machine.)
 #
-# Usage:
-#   cp docker-compose.override.example.yml docker-compose.override.yml
-#   # edit docker-compose.override.yml with your paths
-#   docker compose --env-file ../.env \
-#     -f deploy/docker-compose.example.yml \
-#     -f deploy/docker-compose.override.yml \
-#     up -d
-#
-# Inside the container all folders appear under /workspace/<name>.
+# Inside the container each folder appears under /workspace/<name>.
 # Use :ro (read-only) for folders Claude should read but not modify.
+#
+# The execution server reads this file too, so mounts declared here are
+# automatically mapped back to host paths — this is the only file to edit.
+# After editing, restart with ./start.sh
+#
+# Example:
+#
+#   services:
+#     claude:
+#       volumes:
+#         - /path/to/your/project:/workspace/project:rw
+#         - /path/to/another/repo:/workspace/another-repo:rw
+#         - /path/to/docs:/workspace/docs:ro
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
-  claude:
-    volumes:
-      - /path/to/your/project:/workspace/project:rw
-      - /path/to/another/repo:/workspace/another-repo:rw
-      - /path/to/docs:/workspace/docs:ro
+  claude: {}   # add a volumes: list here — see the example above

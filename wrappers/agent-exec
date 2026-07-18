@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""agent-exec — forwards every wrapped tool call to the host execution server.
+
+The container is deliberately ignorant of authorization. It speaks exactly
+one protocol (see exec_client.py): send { tool, args, reason, repo, branch }
+over a Unix socket, receive { stdout, stderr, exit_code }.
+
+Auth backend selection, credentials, and execution are the host's problem
+(server/). Nothing sensitive ever enters the container.
+
+Usage:
+    agent-exec <tool> [args...]
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+
+# exec_client.py lives next to this script (both in /opt/agent/bin in Docker).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import exec_client  # noqa: E402
+
+
+def _git_branch() -> str:
+    # Use the real git binary, NOT bare "git": PATH resolves to the git
+    # wrapper, which calls agent-exec again — infinite recursion.
+    git = next((p for p in ("/usr/bin/git", "/usr/local/bin/git") if os.path.exists(p)), None)
+    if git is None:
+        return ""
+    try:
+        result = subprocess.run(
+            [git, "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=3,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("Usage: agent-exec <tool> [args...]", file=sys.stderr)
+        return 2
+
+    tool = sys.argv[1]
+    args = sys.argv[2:]
+    reason = os.environ.get("AGENT_REASON", "")
+    debug = os.environ.get("AGENT_DEBUG", "0") == "1"
+
+    if debug:
+        command = " ".join([tool] + args)
+        print(f"[agent-exec] tool={tool} command={command!r} reason={reason!r}", file=sys.stderr)
+
+    try:
+        result = exec_client.execute(
+            tool=tool,
+            args=args,
+            reason=reason,
+            repo=os.getcwd(),
+            branch=_git_branch(),
+        )
+    except Exception as exc:
+        print(f"ERROR: Failed to reach execution server: {exc}", file=sys.stderr)
+        if debug:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+        return 1
+
+    if result.stdout:
+        sys.stdout.write(result.stdout)
+        sys.stdout.flush()
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+        sys.stderr.flush()
+    return result.exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,5 +1,17 @@
 # Environment
 .env
+container.env
+server.env
+**/container.env
+**/server.env
+
+# Generated shared secret for the execution server (never commit)
+exec.token
+**/exec.token
+
+# User-customized egress config (copy from egress-config.example.json)
+egress-config.json
+**/egress-config.json
 
 # Client-specific workspace mounts (local paths, never commit)
 docker-compose.override.yml

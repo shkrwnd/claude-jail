@@ -7,20 +7,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --no-cache-dir pytest
 
-# Copy project
-COPY sdk/ /opt/outhora/sdk/
-COPY wrappers/ /opt/outhora/bin/
-COPY tests/ /opt/outhora/tests/
+# Copy project — container side (wrappers/), host side (server/), and tests
+COPY wrappers/ /opt/agent/bin/
+COPY server/ /opt/agent/server/
+COPY tests/ /opt/agent/tests/
 
-RUN chmod +x /opt/outhora/bin/*
+RUN chmod +x /opt/agent/bin/*
 
-ENV PYTHONPATH="/opt/outhora"
-ENV PATH="/opt/outhora/bin:${PATH}"
+ENV PYTHONPATH="/opt/agent"
+ENV PATH="/opt/agent/bin:${PATH}"
 
-WORKDIR /opt/outhora
+WORKDIR /opt/agent
 
 # Run as non-root
 RUN groupadd -r testuser && useradd -r -g testuser -s /bin/bash testuser
 USER testuser
 
-CMD ["pytest", "tests/test_sdk.py", "-v"]
+CMD ["pytest", "tests/test_exec_client.py", "tests/test_auth_backends.py", "tests/test_outhora.py", "-v"]

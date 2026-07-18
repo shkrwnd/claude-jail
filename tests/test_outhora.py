@@ -1,4 +1,4 @@
-"""Tests for Outhora SDK — aligned with ACP contract."""
+"""Tests for the host-side Outhora client — aligned with ACP contract."""
 
 import json
 import os
@@ -9,9 +9,9 @@ from threading import Thread
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from sdk.client import ActionDenied, ApprovalRequired, OuthoraClient
-from sdk.credentials import build_execution_env
-from sdk.models import ActionResponse, ActionStatus, CredentialResponse
+from server.outhora.client import ActionDenied, ApprovalRequired, OuthoraClient
+from server.outhora.credentials import build_execution_env
+from server.outhora.models import ActionResponse, ActionStatus, CredentialResponse
 
 
 class TestModels(unittest.TestCase):

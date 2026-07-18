@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from sdk.models import CredentialResponse
+from server.outhora.models import CredentialResponse
 
 
 def inject_aws_credentials(creds: CredentialResponse, env: dict[str, str]) -> dict[str, str]:

@@ -1,4 +1,8 @@
-"""Authentication helpers for Outhora API."""
+"""Authentication helpers for Outhora API.
+
+Reads credentials from environment variables. The execution server
+(server/main.py) loads these from server.env before handling requests.
+"""
 
 from __future__ import annotations
 
@@ -12,40 +16,37 @@ class AuthError(Exception):
     """Raised when authentication configuration is missing or invalid."""
 
 
+def _get_env(key: str, required: bool = True) -> str:
+    """Read a value from an environment variable."""
+    value = os.environ.get(key, "")
+    if required and not value:
+        raise AuthError(f"{key} environment variable is not set")
+    return value
+
+
 def get_api_url() -> str:
-    url = os.environ.get("OUTHORA_API_URL", "").rstrip("/")
-    if not url:
-        raise AuthError("OUTHORA_API_URL environment variable is not set")
-    return url
+    return _get_env("OUTHORA_API_URL").rstrip("/")
 
 
 def get_agent_id() -> str:
-    agent_id = os.environ.get("OUTHORA_AGENT_ID", "")
-    if not agent_id:
-        raise AuthError("OUTHORA_AGENT_ID environment variable is not set")
-    return agent_id
+    return _get_env("OUTHORA_AGENT_ID")
 
 
 def get_agent_secret() -> str:
-    secret = os.environ.get("OUTHORA_AGENT_SECRET", "")
-    if not secret:
-        raise AuthError("OUTHORA_AGENT_SECRET environment variable is not set")
-    return secret
+    return _get_env("OUTHORA_AGENT_SECRET")
 
 
 def get_dept_id() -> str:
-    dept_id = os.environ.get("OUTHORA_DEPT_ID", "")
-    if not dept_id:
-        raise AuthError("OUTHORA_DEPT_ID environment variable is not set")
-    return dept_id
+    return _get_env("OUTHORA_DEPT_ID")
 
 
 def get_user_id() -> str:
-    return os.environ.get("OUTHORA_USER_ID", os.environ.get("USER", "unknown"))
+    return _get_env("OUTHORA_USER_ID", required=False) \
+        or os.environ.get("USER", "unknown")
 
 
 def get_session_id() -> str:
-    return os.environ.get("OUTHORA_SESSION_ID", "")
+    return _get_env("OUTHORA_SESSION_ID", required=False)
 
 
 def exchange_token() -> str:
