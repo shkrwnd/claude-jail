@@ -3,7 +3,7 @@
 
 The container is deliberately ignorant of authorization. It speaks exactly
 one protocol (see exec_client.py): send { tool, args, reason, repo, branch }
-over a Unix socket, receive { stdout, stderr, exit_code }.
+over localhost TCP, receive { stdout, stderr, exit_code }.
 
 Auth backend selection, credentials, and execution are the host's problem
 (server/). Nothing sensitive ever enters the container.

@@ -106,7 +106,7 @@ def _load_env_file(path: str) -> None:
                     os.environ[key] = value
     except FileNotFoundError:
         print(f"[server] WARNING: Env file not found at {path}.", flush=True)
-        print(f"[server] Copy deploy/server.env.example to {path} and fill in credentials.", flush=True)
+        print("[server] Run 'sh deploy/create-configs.sh' to create missing config files.", flush=True)
         return
 
     print(f"[server] Loaded env from {path}", flush=True)

@@ -45,7 +45,7 @@ class TestAuthDecision(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestBackendFactory(unittest.TestCase):
-    def test_default_is_outhora(self):
+    def test_explicit_name_selects_outhora(self):
         # Patching __init__ to avoid needing real env vars
         with patch.object(OuthoraBackend, "__init__", return_value=None):
             backend = get_auth_backend("outhora")

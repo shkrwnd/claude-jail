@@ -23,4 +23,4 @@ WORKDIR /opt/agent
 RUN groupadd -r testuser && useradd -r -g testuser -s /bin/bash testuser
 USER testuser
 
-CMD ["pytest", "tests/test_exec_client.py", "tests/test_auth_backends.py", "tests/test_outhora.py", "-v"]
+CMD ["pytest", "tests/", "-v"]

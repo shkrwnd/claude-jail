@@ -6,9 +6,9 @@ Backend selection:
   the execution protocol.
 
 Available built-in backends:
-    outhora     — Outhora ACP (production default)
-    allow_all   — Approve everything, no network calls (dev/CI)
+    allow_all   — Approve everything, no network calls (dev/CI; default)
     webhook     — Generic HTTP webhook (custom approval service)
+    outhora     — Outhora ACP (approval workflows + temp credentials)
 
 Custom backends: add an entry to REGISTRY pointing to "module.ClassName"::
 
@@ -41,7 +41,7 @@ def get_auth_backend(name: str | None = None) -> AuthBackend:
     Selection order:
       1. explicit `name` argument (testing only)
       2. AUTH_BACKEND env var (set in server.env)
-      3. "outhora" default
+      3. "allow_all" default
     """
     backend_name = name or os.environ.get("AUTH_BACKEND", _DEFAULT)
     dotted_path = REGISTRY.get(backend_name)

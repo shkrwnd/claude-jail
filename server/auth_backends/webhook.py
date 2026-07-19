@@ -63,7 +63,7 @@ class WebhookBackend(AuthBackend):
         self._timeout = int(os.environ.get("AUTH_WEBHOOK_TIMEOUT", "30"))
 
     def _headers(self) -> dict[str, str]:
-        headers = {"Content-Type": "application/json", "User-Agent": "outhora-wrapper/1.0"}
+        headers = {"Content-Type": "application/json", "User-Agent": "claude-jail/1.0"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         return headers
