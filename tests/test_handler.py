@@ -1,4 +1,4 @@
-"""Tests for host-side request handling (server/handler.py) — path mapping."""
+"""Tests for host-side request handling (server/handler.py)."""
 
 import os
 import sys
@@ -84,6 +84,68 @@ class TestRepoPathMapping(unittest.TestCase):
         host, err = handler._map_repo_to_host("/workspaceevil")
         self.assertIsNone(host)
         self.assertIn("outside the mapped workspace", err["stderr"])
+
+
+class _StubBackend:
+    def __init__(self, decision):
+        self._decision = decision
+
+    def authorize(self, **kwargs):
+        return self._decision
+
+    def execution_env(self, tool, decision):
+        return dict(os.environ)
+
+
+class TestDecisionHandling(unittest.TestCase):
+    """Pending vs denied decisions must be distinguishable in the container."""
+
+    def _execute(self, decision, request=None):
+        with unittest.mock.patch.object(
+            handler, "get_auth_backend", return_value=_StubBackend(decision)
+        ):
+            return handler.execute(request or {"tool": "git", "args": ["status"]})
+
+    def test_pending_reports_approval_waiting(self):
+        from server.auth_backends.base import AuthDecision
+        result = self._execute(AuthDecision(
+            status="pending", reason="still awaiting approval", request_id="req-42"
+        ))
+        self.assertEqual(result["exit_code"], 1)
+        self.assertIn("PENDING APPROVAL", result["stderr"])
+        self.assertIn("req-42", result["stderr"])
+        self.assertNotIn("DENIED", result["stderr"])
+
+    def test_denied_reports_reason(self):
+        from server.auth_backends.base import AuthDecision
+        result = self._execute(AuthDecision(status="denied", reason="not allowed"))
+        self.assertEqual(result["exit_code"], 1)
+        self.assertIn("DENIED: not allowed", result["stderr"])
+
+    def test_approved_executes(self):
+        from server.auth_backends.base import AuthDecision
+        result = self._execute(
+            AuthDecision(status="approved"),
+            {"tool": "echo", "args": ["hello"]},
+        )
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(result["stdout"].strip(), "hello")
+
+
+class TestExecutionTimeout(unittest.TestCase):
+    def test_hung_command_is_killed(self):
+        from server.auth_backends.base import AuthDecision
+        with unittest.mock.patch.object(
+            handler, "get_auth_backend",
+            return_value=_StubBackend(AuthDecision(status="approved")),
+        ), unittest.mock.patch.dict(os.environ, {"EXEC_TIMEOUT": "1"}):
+            result = handler.execute({"tool": "sleep", "args": ["10"]})
+        self.assertEqual(result["exit_code"], 1)
+        self.assertIn("timed out after 1s", result["stderr"])
+
+    def test_invalid_timeout_falls_back_to_default(self):
+        with unittest.mock.patch.dict(os.environ, {"EXEC_TIMEOUT": "banana"}):
+            self.assertEqual(handler._exec_timeout(), handler._DEFAULT_TIMEOUT)
 
 
 if __name__ == "__main__":

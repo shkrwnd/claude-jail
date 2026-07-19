@@ -19,8 +19,9 @@ class AuthDecision:
     status values:
         "approved" — action is allowed, proceed with execution
         "denied"   — action is blocked, do not execute
-        "pending"  — waiting for human approval (backend should poll to terminal state
-                     before returning, so callers never see this in practice)
+        "pending"  — still waiting for human approval. The handler does not
+                     execute, but tells the agent an approval is in flight so
+                     it can inform the user and retry (unlike a denial).
     """
 
     status: str
@@ -33,9 +34,9 @@ class AuthDecision:
 class AuthBackend(ABC):
     """Authorization middleware — decides whether a tool command may execute.
 
-    Implementations should block (poll) until a terminal decision (approved/denied)
-    is reached. The handler treats any non-approved decision as a failure and
-    will not execute the command.
+    Implementations that need human approval should poll toward a terminal
+    decision (approved/denied) and return "pending" if the poll window
+    expires first. Only "approved" executes.
 
     Example minimal implementation::
 
@@ -66,9 +67,9 @@ class AuthBackend(ABC):
             branch:  Git branch in the container (context for the approver).
 
         Returns:
-            AuthDecision with status "approved" or "denied".
-            Status "pending" should only be returned if the backend cannot poll
-            (e.g. non-blocking mode); the handler will treat it as a failure.
+            AuthDecision. "approved" executes; "denied" returns the reason as
+            an error; "pending" (e.g. after a poll window expires without a
+            human decision) returns a retryable "approval waiting" message.
         """
         ...
 

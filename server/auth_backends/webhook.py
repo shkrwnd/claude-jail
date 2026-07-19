@@ -153,9 +153,11 @@ class WebhookBackend(AuthBackend):
                     )
                 print("  Still waiting...", file=sys.stderr)
 
+            # Still unapproved after the poll window — report "pending", not
+            # "denied": the handler tells the agent an approval is waiting.
             return AuthDecision(
-                status="denied",
-                reason=f"Approval timed out after {_POLL_TIMEOUT}s",
+                status="pending",
+                reason=f"still awaiting approval after {_POLL_TIMEOUT}s",
                 request_id=request_id,
             )
 

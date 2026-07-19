@@ -144,7 +144,9 @@ def main() -> None:
         sys.exit(1)
     print(f"[server] Auth backend: {backend}", flush=True)
 
-    server = http.server.HTTPServer((args.host, args.port), ExecutionHandler)
+    # ThreadingHTTPServer: each request gets its own thread, so one slow or
+    # approval-blocked command cannot stall every other request.
+    server = http.server.ThreadingHTTPServer((args.host, args.port), ExecutionHandler)
     print(f"[server] Listening on {args.host}:{args.port}", flush=True)
 
     def _shutdown(sig, frame):

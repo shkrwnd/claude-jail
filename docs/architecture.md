@@ -1,511 +1,182 @@
-# Outhora Agent Integration — Architecture & Sequence Diagrams
+# Architecture
 
-## System Overview
+Internals of Claude Jail: how a tool call travels from the container to the
+host, and where the trust boundaries sit. Read the README first for the
+user-facing overview; this document is for people extending or auditing the
+system.
 
-Outhora sits between a coding agent (Claude Code, Copilot, Cursor, etc.) and the infrastructure tools it needs to use. Instead of giving the agent static credentials and unrestricted access, every tool invocation is intercepted at the CLI level, authorized by Outhora's hosted policy engine, and executed only with short-lived credentials scoped to that single action.
+## Trust Model
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Docker Container                             │
-│                                                                     │
-│  ┌──────────────┐    ┌────────────────────┐    ┌────────────────┐  │
-│  │  Claude Code  │───▶│  Outhora Wrappers  │───▶│  Real Binaries │  │
-│  │  (or any AI   │    │  /opt/outhora/bin/  │    │  aws, gh, etc  │  │
-│  │   agent)      │    │  aws, gh, kubectl,  │    │                │  │
-│  └──────────────┘    │  terraform, psql    │    └───────┬────────┘  │
-│                      └─────────┬──────────┘            │           │
-│                                │                       │           │
-└────────────────────────────────┼───────────────────────┼───────────┘
-                                 │ HTTPS                 │
-                                 ▼                       ▼
-                      ┌──────────────────┐      ┌──────────────┐
-                      │  api.outhora.com │      │  AWS / GH /  │
-                      │                  │      │  K8s / DB /  │
-                      │  • Policy Engine │      │  Terraform   │
-                      │  • Approval UI   │      │  Cloud       │
-                      │  • Credential    │      └──────────────┘
-                      │    Vending       │
-                      │  • Audit Store   │
-                      └──────────────────┘
-```
+Two zones with a hard boundary between them:
 
-### How the wrapper intercept works
+| Zone | Code | Trust | Contains |
+|------|------|-------|----------|
+| Container | `wrappers/` | Untrusted (agent-controlled) | CLI shims, `agent-exec`, `exec_client.py` — stdlib-only, auth-agnostic |
+| Host | `server/` | Trusted | Execution server, auth backends, credentials, path mapping |
 
-The Outhora wrappers are placed at `/opt/outhora/bin/` and this directory is prepended to `$PATH` before `/usr/local/bin` and `/usr/bin`. When Claude Code runs `aws s3 ls`, the shell resolves `aws` to `/opt/outhora/bin/aws` (the wrapper) instead of `/usr/local/bin/aws` (the real binary). The wrapper calls Outhora's API, and if authorized, locates and invokes the real binary with temporary credentials injected as environment variables.
+Rules that keep the boundary intact:
 
-### Authentication
+- `wrappers/` never imports anything from `server/`. The container ships only
+  `wrappers/` (see `deploy/Dockerfile`).
+- The container knows exactly one protocol: JSON over localhost TCP. It has
+  no knowledge of which auth backend is configured, what policies exist, or
+  what credentials the host holds.
+- Bypassing the wrappers gains nothing: an agent that opens the TCP
+  connection directly just reaches the same server, which authorizes on the
+  host using policy the container cannot see or influence.
+- The only sensitive value in the container is `EXEC_TOKEN`, which grants a
+  single right: the right to *ask* the host to run a command.
 
-The container authenticates to Outhora using HTTP Basic auth with an **agent ID** and **agent secret** pair, scoped to a **department** (`dept_id`). These are set as environment variables and never written to disk. The agent identity determines which policies apply and what credentials can be issued.
+## Request Lifecycle
 
----
-
-## Sequence Diagrams
-
-### 1. Allowed Action (e.g. `aws s3 ls`)
-
-The most common flow. The agent runs a read-only command, Outhora allows it immediately, issues temporary credentials, and the command executes.
+What happens when Claude runs `git push` inside the container:
 
 ```
-┌───────────┐     ┌──────────────┐     ┌──────────────────┐     ┌─────────┐
-│ Claude Code│     │ Outhora      │     │ api.outhora.com  │     │  AWS    │
-│ (Agent)    │     │ Wrapper      │     │                  │     │         │
-└─────┬─────┘     └──────┬───────┘     └────────┬─────────┘     └────┬────┘
-      │                  │                      │                    │
-      │  aws s3 ls       │                      │                    │
-      │─────────────────▶│                      │                    │
-      │                  │                      │                    │
-      │                  │  POST /api/v1/authorize                   │
-      │                  │  {tool: "aws",       │                    │
-      │                  │   command: "aws s3 ls",                   │
-      │                  │   user_id, dept_id,  │                    │
-      │                  │   agent_session_id}  │                    │
-      │                  │─────────────────────▶│                    │
-      │                  │                      │                    │
-      │                  │  {decision: "allow", │                    │
-      │                  │   action_id: "act-1"}│                    │
-      │                  │◀─────────────────────│                    │
-      │                  │                      │                    │
-      │                  │  POST /api/v1/credentials                 │
-      │                  │  {tool: "aws",       │                    │
-      │                  │   action_id: "act-1"}│                    │
-      │                  │─────────────────────▶│                    │
-      │                  │                      │                    │
-      │                  │  {access_key: "...", │                    │
-      │                  │   secret_key: "...", │                    │
-      │                  │   session_token: "...",                   │
-      │                  │   expires_at: "..."}  │                    │
-      │                  │◀─────────────────────│                    │
-      │                  │                      │                    │
-      │                  │  Inject AWS_ACCESS_KEY_ID,                │
-      │                  │  AWS_SECRET_ACCESS_KEY,                   │
-      │                  │  AWS_SESSION_TOKEN as env vars            │
-      │                  │                      │                    │
-      │                  │  exec /usr/local/bin/aws s3 ls            │
-      │                  │──────────────────────────────────────────▶│
-      │                  │                      │                    │
-      │                  │  (bucket listing)    │                    │
-      │                  │◀──────────────────────────────────────────│
-      │                  │                      │                    │
-      │  (output)        │                      │                    │
-      │◀─────────────────│                      │                    │
-      │                  │                      │                    │
-      │                  │  POST /api/v1/audit (background)          │
-      │                  │  {tool: "aws",       │                    │
-      │                  │   command: "aws s3 ls",                   │
-      │                  │   decision: "allow", │                    │
-      │                  │   exit_code: 0}      │                    │
-      │                  │─────────────────────▶│                    │
-      │                  │                      │                    │
+CONTAINER                                      HOST
+─────────                                      ────
+git push
+  │  PATH resolves "git" to /opt/agent/bin/git (wrapper shim)
+  ▼
+wrappers/git
+  │  exec agent-exec git push
+  ▼
+agent-exec
+  │  collects context: cwd (repo), current branch, AGENT_REASON
+  ▼
+exec_client.py
+  │  POST http://host.docker.internal:8377/execute
+  │  headers: X-Exec-Token: <EXEC_TOKEN>
+  │  body: { tool, args, reason, repo, branch }
+  ▼─────────────────────────────────────────▶ server/main.py
+                                               │  1. hmac.compare_digest token check
+                                               │     (401 fail-closed on mismatch)
+                                               ▼
+                                             server/handler.py
+                                               │  2. map /workspace/... → host path
+                                               │  3. backend.authorize(...)
+                                               │     denied → error, nothing runs
+                                               │  4. env = backend.execution_env(...)
+                                               │     (temp credentials, if any)
+                                               │  5. subprocess.run(real binary)
+  ◀─────────────────────────────────────────── │  6. { stdout, stderr, exit_code }
+  │
+  ▼
+stdout/stderr printed, exit code propagated — the command behaves
+as if it ran locally.
 ```
 
-**Key points:**
-- Credentials are injected as process-level environment variables, never written to `~/.aws/credentials`
-- The real binary is located by scanning `$PATH` and skipping the wrapper directory
-- Audit is sent in the background (fire-and-forget) so it never blocks the agent
+## The Execution Protocol
 
----
+Single endpoint: `POST /execute` on `127.0.0.1:8377`.
 
-### 2. Denied Action (e.g. `terraform destroy`)
+Request body:
 
-A destructive command is blocked immediately. The real binary is never executed. No credentials are issued.
+| Field | Meaning |
+|-------|---------|
+| `tool` | Wrapper name (`git`, `aws`, `kubectl`, ...) |
+| `args` | Argument list, unmodified |
+| `reason` | Optional free-text intent from `AGENT_REASON` |
+| `repo` | Container cwd (`/workspace/...`) |
+| `branch` | Current git branch, if any |
 
-```
-┌───────────┐     ┌──────────────┐     ┌──────────────────┐
-│ Claude Code│     │ Outhora      │     │ api.outhora.com  │
-│ (Agent)    │     │ Wrapper      │     │                  │
-└─────┬─────┘     └──────┬───────┘     └────────┬─────────┘
-      │                  │                      │
-      │  terraform       │                      │
-      │  destroy         │                      │
-      │─────────────────▶│                      │
-      │                  │                      │
-      │                  │  POST /api/v1/authorize
-      │                  │  {tool: "terraform", │
-      │                  │   command: "terraform destroy",
-      │                  │   user_id, dept_id}  │
-      │                  │─────────────────────▶│
-      │                  │                      │
-      │                  │  {decision: "deny",  │
-      │                  │   reason: "destructive
-      │                  │   action blocked by  │
-      │                  │   policy"}           │
-      │                  │◀─────────────────────│
-      │                  │                      │
-      │  DENIED:         │                      │
-      │  "destructive    │                      │
-      │   action blocked │                      │
-      │   by policy"     │                      │
-      │◀─────────────────│                      │
-      │                  │                      │
-      │  (exit code 1)   │                      │
-      │                  │                      │
-      │           ╔═══════════════════════╗     │
-      │           ║ No credentials issued ║     │
-      │           ║ No binary executed    ║     │
-      │           ║ No side effects       ║     │
-      │           ╚═══════════════════════╝     │
+Response: `{ stdout, stderr, exit_code }`. Nothing else crosses the
+boundary — no credentials, no policy details.
+
+Authentication: the server only accepts requests carrying the shared secret
+from `deploy/exec.token` (`X-Exec-Token` header, compared with
+`hmac.compare_digest`). The token reaches the container via compose
+`env_file`, and the server refuses to start without one. This stops other
+local processes or containers from using the execution server.
+
+`GET /health` is unauthenticated and returns `{"status": "ok"}`.
+
+## Path Mapping
+
+The container sees `/workspace/...`; the host must run commands in the real
+directories. `server/handler.py` builds the mapping from
+`deploy/docker-compose.override.yml` — the same file that defines the
+mounts — by parsing lines of the form:
+
+```yaml
+- /host/path:/workspace/name:rw
 ```
 
-**Key points:**
-- The deny happens before any credentials are fetched — the agent never gets access
-- Exit code 1 signals Claude Code that the command failed, so it can adapt
-- The deny reason is surfaced to the agent so it can explain to the user why
+Translation is longest-prefix: `/workspace/project/sub` maps through the
+`/workspace/project` mount. A request for a container path with no mapping
+fails loudly rather than executing in the wrong directory.
 
----
+## Auth Backends
 
-### 3. Approval-Required Action (e.g. `terraform apply`)
+A backend is one class implementing `server/auth_backends/base.py`:
 
-A sensitive-but-legitimate command needs human review. The wrapper prints an approval URL and exits immediately without executing. A human reviews and approves (or denies) in the Outhora UI.
-
-```
-┌───────────┐     ┌──────────────┐     ┌──────────────────┐     ┌──────────┐
-│ Claude Code│     │ Outhora      │     │ api.outhora.com  │     │ Approver │
-│ (Agent)    │     │ Wrapper      │     │                  │     │ (Human)  │
-└─────┬─────┘     └──────┬───────┘     └────────┬─────────┘     └────┬─────┘
-      │                  │                      │                    │
-      │  terraform       │                      │                    │
-      │  apply           │                      │                    │
-      │─────────────────▶│                      │                    │
-      │                  │                      │                    │
-      │                  │  POST /api/v1/authorize                   │
-      │                  │  {tool: "terraform", │                    │
-      │                  │   command: "terraform apply",             │
-      │                  │   user_id, dept_id}  │                    │
-      │                  │─────────────────────▶│                    │
-      │                  │                      │                    │
-      │                  │  {decision:          │                    │
-      │                  │   "approval_required",                    │
-      │                  │   approval_id:       │                    │
-      │                  │   "apr-789"}         │                    │
-      │                  │◀─────────────────────│                    │
-      │                  │                      │                    │
-      │  ╔═══════════════════════════════════╗  │                    │
-      │  ║ Approval required in Outhora     ║  │                    │
-      │  ║                                   ║  │                    │
-      │  ║ URL: https://app.outhora.com/    ║  │                    │
-      │  ║      approvals/apr-789           ║  │                    │
-      │  ║                                   ║  │                    │
-      │  ║ Command will not execute until   ║  │                    │
-      │  ║ approved.                        ║  │                    │
-      │  ╚═══════════════════════════════════╝  │                    │
-      │◀─────────────────│                      │                    │
-      │                  │                      │                    │
-      │  (exit code 2)   │                      │                    │
-      │                  │                      │                    │
-      │                  │                      │                    │
-      │                  │              ┌───────┴────────┐           │
-      │                  │              │ Outhora shows: │           │
-      │                  │              │ • who requested│           │
-      │                  │              │ • what command │──────────▶│
-      │                  │              │ • repo/branch  │  reviews  │
-      │                  │              │ • dept context │           │
-      │                  │              └───────┬────────┘           │
-      │                  │                      │                    │
-      │                  │                      │◀── approve/deny ───│
-      │                  │                      │                    │
-      │                  │                      │                    │
-      │  (agent retries  │                      │                    │
-      │   later or user  │                      │                    │
-      │   re-runs cmd)   │                      │                    │
-      │─────────────────▶│  POST /api/v1/authorize                   │
-      │                  │─────────────────────▶│                    │
-      │                  │  {decision: "allow"} │                    │
-      │                  │◀─────────────────────│                    │
-      │                  │                      │                    │
-      │                  │  (continues with credential               │
-      │                  │   fetch + execution, │                    │
-      │                  │   same as Allow flow)│                    │
+```python
+class AuthBackend(ABC):
+    def authorize(self, tool, command, args, reason="", repo="", branch="") -> AuthDecision: ...
+    def execution_env(self, tool, decision) -> dict[str, str]:  # optional override
+        return dict(os.environ)
 ```
 
-**Key points:**
-- Exit code 2 distinguishes "needs approval" from "denied" (exit 1) and "success" (exit 0)
-- The agent can poll `GET /api/v1/approvals/{id}` to check if it was approved (future)
-- Outhora's UI shows the approver full context: command, repo, branch, who requested it, department
+- `authorize` returns `AuthDecision(status=...)`; only `"approved"` executes.
+  Anything else returns the decision's `reason` to the container as an error.
+- `execution_env` supplies the subprocess environment — override it to inject
+  short-lived, action-scoped credentials instead of the host environment.
 
----
+Backends are registered in `server/auth_backends/__init__.py` as lazy dotted
+paths (`REGISTRY["name"] = "module.ClassName"`) and selected via
+`AUTH_BACKEND` in `deploy/server.env`. The default is `allow_all`. At
+startup, `server/main.py` validates that the selected backend's required env
+vars (`_REQUIRED_ENV`) are present and exits with a clear error if not —
+misconfiguration fails at boot, not at first request.
 
-### 4. Temporary Credential Lifecycle
+The README's "Writing a Custom Backend" section has a worked example.
 
-This diagram focuses on how credentials flow — they are never stored, never shared across actions, and expire automatically.
+## Configuration Layering
 
-```
-┌───────────────────────────────────────────────────────────────────┐
-│                     Credential Lifecycle                          │
-│                                                                   │
-│  ┌─────────┐        ┌─────────────┐        ┌──────────────────┐ │
-│  │ Wrapper  │        │ Outhora API │        │ Cloud Provider   │ │
-│  │ Process  │        │             │        │ (AWS STS / GH    │ │
-│  │          │        │             │        │  App / K8s SA)   │ │
-│  └────┬─────┘        └──────┬──────┘        └───────┬──────────┘ │
-│       │                     │                       │            │
-│       │  1. Request creds   │                       │            │
-│       │  (tool + action_id) │                       │            │
-│       │────────────────────▶│                       │            │
-│       │                     │                       │            │
-│       │                     │  2. AssumeRole /      │            │
-│       │                     │     generate token    │            │
-│       │                     │──────────────────────▶│            │
-│       │                     │                       │            │
-│       │                     │  3. Temp creds        │            │
-│       │                     │  (TTL: minutes)       │            │
-│       │                     │◀──────────────────────│            │
-│       │                     │                       │            │
-│       │  4. Temp creds      │                       │            │
-│       │  (in HTTP response) │                       │            │
-│       │◀────────────────────│                       │            │
-│       │                     │                       │            │
-│       │  5. Inject as env   │                       │            │
-│       │     vars in subprocess                      │            │
-│       │  ┌────────────────────────────────┐         │            │
-│       │  │ AWS_ACCESS_KEY_ID=AKIA...     │         │            │
-│       │  │ AWS_SECRET_ACCESS_KEY=...     │         │            │
-│       │  │ AWS_SESSION_TOKEN=...         │         │            │
-│       │  │                               │         │            │
-│       │  │  > aws s3 ls                  │─────────────────────▶│
-│       │  │  (uses temp creds)            │         │            │
-│       │  └────────────────────────────────┘         │            │
-│       │                     │                       │            │
-│       │  6. Process exits   │                       │            │
-│       │     — env vars gone │                       │            │
-│       │     — nothing on    │                       │            │
-│       │       disk          │                       │            │
-│       │                     │                       │            │
-│       │                     │  7. Creds auto-expire │            │
-│       │                     │     after TTL         │            │
-│       │                     │                       │            │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │ ✗ No ~/.aws/credentials file                              │  │
-│  │ ✗ No credential files on disk at any point                │  │
-│  │ ✗ No credential reuse across actions                      │  │
-│  │ ✗ No long-lived tokens                                    │  │
-│  │ ✓ Each action gets unique, scoped, short-lived creds      │  │
-│  └────────────────────────────────────────────────────────────┘  │
-└───────────────────────────────────────────────────────────────────┘
-```
+Two kinds of config files in `deploy/`:
 
----
+- **Committed defaults** — `server.defaults.env`, `container.defaults.env`,
+  `docker-compose.yml`. Never edited by users; updated by `git pull`.
+- **Generated user files** — `server.env`, `container.env`,
+  `docker-compose.override.yml`, `exec.token`. Created by
+  `deploy/create-configs.sh` (run automatically by `start.sh`), gitignored,
+  sparse: they contain only the user's overrides.
 
-### 5. Audit Trail
+Precedence, first-set-wins on the server: real environment / CLI flags →
+`server.env` → `server.defaults.env`. In the container, compose `env_file`
+ordering achieves the same layering. Because user files hold only deltas,
+new defaults added upstream take effect without any migration.
 
-Every tool invocation — whether allowed, denied, or pending approval — produces an audit record. This diagram shows what is captured and when.
+## Design Decisions
 
-```
-┌──────────────┐     ┌──────────────────┐
-│ Outhora      │     │ api.outhora.com  │
-│ Wrapper      │     │ /api/v1/audit    │
-└──────┬───────┘     └────────┬─────────┘
-       │                      │
-       │  ┌──────────────────────────────────────────┐
-       │  │ Audit Event Payload                      │
-       │  │                                          │
-       │  │ {                                        │
-       │  │   "timestamp": "2026-06-14T15:30:00Z",  │
-       │  │   "tool":      "aws",                   │
-       │  │   "command":   "aws s3 ls s3://bucket",  │
-       │  │   "decision":  "allow",                  │
-       │  │   "user_id":   "dev-alice",     │
-       │  │   "agent_session_id": "sess-abc123",    │
-       │  │   "action_id": "act-456",               │
-       │  │   "exit_code": 0                        │
-       │  │ }                                        │
-       │  └──────────────────────────────────────────┘
-       │                      │
-       │  POST (background)   │
-       │─────────────────────▶│
-       │                      │
-       │  If fails:           │
-       │  retry up to 3×      │
-       │  with backoff        │
-       │  (1s, 2s, 4s)        │
-       │                      │
-       │  202 Accepted        │
-       │◀─────────────────────│
-       │                      │
+**Why TCP, not a Unix socket.** Docker Desktop (macOS/Windows) cannot
+reliably share Unix sockets between host and container — bind-mounted
+sockets hit stale inodes and `EOPNOTSUPP`. Loopback TCP with a shared-secret
+token works identically everywhere. The server binds `127.0.0.1` only and is
+never exposed to the network.
 
-  ┌──────────────────────────────────────────────────────────┐
-  │ What gets logged:                                        │
-  │                                                          │
-  │  • Every "allow"  — what ran, who ran it, exit code     │
-  │  • Every "deny"   — what was blocked and why            │
-  │  • Every "approval_required" — what awaits review       │
-  │                                                          │
-  │ What is NEVER logged:                                    │
-  │                                                          │
-  │  • Credentials (access keys, tokens, passwords)         │
-  │  • Command output / stdout / stderr                     │
-  │  • File contents                                        │
-  └──────────────────────────────────────────────────────────┘
-```
+**Why execute on the host.** Credentials must never enter the container, so
+the command that needs them must run where they live. The trade-off is that
+host execution of agent-controlled workspaces is itself an escape vector
+(e.g. malicious `.git/config`, git hooks, terraform providers) — this is a
+known gap with a layered mitigation plan tracked in `TODO.md`.
 
----
+**Why the image is auth-ignorant.** Keeping every line of auth logic out of
+the container means switching or reconfiguring backends never requires an
+image rebuild, and there is nothing inside for the agent to read or tamper
+with. The import boundary (`wrappers/` never imports `server/`) is what
+makes this guarantee checkable.
 
-### 6. End-to-End: Complete Wrapper Execution Flow
+## Code Map
 
-This is the full lifecycle of a single wrapper invocation, showing every step and decision point.
-
-```
-                    ┌─────────────────┐
-                    │ Agent runs      │
-                    │ "aws s3 ls"     │
-                    └────────┬────────┘
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │ Shell resolves  │
-                    │ aws → wrapper   │
-                    │ (/opt/outhora/  │
-                    │  bin/aws)       │
-                    └────────┬────────┘
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │ Wrapper sources │
-                    │ outhora-common  │
-                    │ .sh             │
-                    └────────┬────────┘
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │ Validate env:   │
-                    │ OUTHORA_AGENT_ID│
-                    │ OUTHORA_AGENT_  │
-                    │   SECRET        │
-                    │ OUTHORA_DEPT_ID │
-                    └────────┬────────┘
-                             │
-                             ▼
-                ┌────────────────────────┐
-                │ POST /api/v1/authorize │
-                │                        │
-                │ Auth: Basic            │
-                │   {agent_id:secret}    │
-                │                        │
-                │ Body: {tool, command,  │
-                │   user_id, dept_id,    │
-                │   agent_session_id,    │
-                │   repo, branch}        │
-                └────────────┬───────────┘
-                             │
-                             ▼
-                  ┌──────────────────┐
-                  │ Decision?        │
-                  └──┬───────┬───┬───┘
-                     │       │   │
-              ┌──────┘       │   └──────┐
-              ▼              ▼          ▼
-        ┌──────────┐  ┌───────────┐  ┌──────────────┐
-        │  ALLOW   │  │   DENY    │  │  APPROVAL    │
-        │          │  │           │  │  REQUIRED    │
-        └────┬─────┘  └─────┬─────┘  └──────┬───────┘
-             │              │               │
-             │              ▼               ▼
-             │     ┌──────────────┐  ┌──────────────┐
-             │     │ Print reason │  │ Print URL:   │
-             │     │ to stderr    │  │ app.outhora  │
-             │     │              │  │ .com/approve │
-             │     │ Exit code: 1 │  │ /{id}        │
-             │     └──────────────┘  │              │
-             │                       │ Exit code: 2 │
-             ▼                       └──────────────┘
-    ┌─────────────────┐
-    │ POST /api/v1/   │
-    │ credentials     │
-    │                 │
-    │ {tool,          │
-    │  action_id}     │
-    └────────┬────────┘
-             │
-             ▼
-    ┌─────────────────┐
-    │ Inject creds    │
-    │ as env vars:    │
-    │                 │
-    │ AWS_ACCESS_     │
-    │   KEY_ID        │
-    │ AWS_SECRET_     │
-    │   ACCESS_KEY    │
-    │ AWS_SESSION_    │
-    │   TOKEN         │
-    └────────┬────────┘
-             │
-             ▼
-    ┌─────────────────┐
-    │ Find real binary│
-    │ by scanning     │
-    │ PATH, skipping  │
-    │ wrapper dir     │
-    └────────┬────────┘
-             │
-             ▼
-    ┌─────────────────┐
-    │ exec real binary│
-    │ with injected   │
-    │ env vars        │
-    │                 │
-    │ Capture exit    │
-    │ code            │
-    └────────┬────────┘
-             │
-             ▼
-    ┌─────────────────┐
-    │ POST /api/v1/   │
-    │ audit           │
-    │ (background,    │
-    │  3× retry)      │
-    └────────┬────────┘
-             │
-             ▼
-    ┌─────────────────┐
-    │ Exit with       │
-    │ original exit   │
-    │ code            │
-    └─────────────────┘
-```
-
----
-
-## Component Descriptions
-
-### Outhora CLI Wrappers (`/opt/outhora/bin/`)
-
-Bash scripts that shadow real tool binaries in `$PATH`. Each wrapper follows an identical pattern:
-
-1. **Capture** — record the full command (`tool + arguments`)
-2. **Authorize** — `POST /api/v1/authorize` with command details, agent identity, and context (repo, branch, department)
-3. **Decide** — handle `allow` / `deny` / `approval_required`
-4. **Credential fetch** — if allowed, `POST /api/v1/credentials` to get short-lived secrets
-5. **Inject** — set credentials as environment variables (tool-specific: `AWS_*`, `GH_TOKEN`, `PGPASSWORD`, etc.)
-6. **Execute** — run the real binary with the injected environment
-7. **Audit** — `POST /api/v1/audit` in the background with the outcome and exit code
-
-### Outhora Python SDK (`/opt/outhora/sdk/`)
-
-A zero-dependency (stdlib-only) Python SDK for programmatic access to the same API the wrappers use. Useful for:
-
-- Custom tools or scripts that need authorization
-- Building higher-level orchestration on top of Outhora
-- Testing and validation
-
-### Outhora Hosted Platform (`api.outhora.com`)
-
-The server-side components — **not** part of this integration package:
-
-| Component | Responsibility |
-|-----------|---------------|
-| **Policy Engine** | Evaluates authorization requests against configured policies per department. Returns allow/deny/approval_required. |
-| **Approval UI** | Web interface at `app.outhora.com/approvals/{id}` where designated approvers review and decide on pending actions. |
-| **Credential Vending** | Issues short-lived, scoped credentials by calling cloud provider APIs (AWS STS, GitHub App installations, K8s token requests). |
-| **Audit Store** | Immutable log of every authorization decision, who made it, what was executed, and the outcome. |
-
-### Security Boundaries
-
-| Boundary | Enforced By |
-|----------|------------|
-| Container isolation (filesystem, process) | Docker |
-| No static credentials in container | Docker Compose config (no host mounts for `~/.aws`, `~/.ssh`, etc.) |
-| Authorization before execution | Outhora wrappers (PATH precedence) |
-| Short-lived credentials only | Outhora credential vending + cloud provider TTLs |
-| Audit trail | Outhora audit API (fire-and-forget with retry) |
-| Human approval for sensitive ops | Outhora approval workflow |
-| Non-root execution | Dockerfile `USER outhora` |
-| No privilege escalation | `cap_drop: ALL` + `no-new-privileges:true` |
+| Path | Role |
+|------|------|
+| `wrappers/<tool>` | Shell shims; delegate to `agent-exec` |
+| `wrappers/agent-exec` | Collects context (cwd, branch, reason), calls the client |
+| `wrappers/exec_client.py` | Protocol client — stdlib-only HTTP over TCP |
+| `server/main.py` | HTTP listener, token auth, env layering, startup validation |
+| `server/handler.py` | Path mapping → authorize → build env → run real binary |
+| `server/auth_backends/base.py` | `AuthBackend` ABC + `AuthDecision` |
+| `server/auth_backends/allow_all.py` | Approve everything (dev/CI default) |
+| `server/auth_backends/webhook.py` | POST decisions to a custom approval service |
+| `deploy/` | Dockerfile, compose files, layered env config, token |
+| `start.sh` | Entry point: configs → server → container → shell |

@@ -33,6 +33,17 @@ if _ROOT not in sys.path:
 
 from server.auth_backends import get_auth_backend  # noqa: E402
 
+# Hard cap on how long an executed command may run (seconds). Prevents a hung
+# command (e.g. an interactive prompt) from holding a server thread forever.
+_DEFAULT_TIMEOUT = 300
+
+
+def _exec_timeout() -> int:
+    try:
+        return int(os.environ.get("EXEC_TIMEOUT") or _DEFAULT_TIMEOUT)
+    except ValueError:
+        return _DEFAULT_TIMEOUT
+
 
 def _log(message: str) -> None:
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -162,6 +173,23 @@ def _execute(request: dict) -> dict:
     except Exception as exc:
         return _error(f"ERROR: Authorization failed for {command!r}: {exc}")
 
+    if decision.status == "pending":
+        # Not a denial: a human simply hasn't approved yet. Tell the agent
+        # explicitly so it can inform the user and retry instead of giving up.
+        detail = f" ({decision.reason})" if decision.reason else ""
+        ref = f" [request id: {decision.request_id}]" if decision.request_id else ""
+        _log(f"PENDING: {command!r}{detail}{ref}")
+        return {
+            "stdout": "",
+            "stderr": (
+                f"PENDING APPROVAL: {command!r} requires human approval and has "
+                f"not been approved yet{detail}{ref}. "
+                "Tell the user an approval is waiting, then retry the command "
+                "once it has been granted."
+            ),
+            "exit_code": 1,
+        }
+
     if decision.status != "approved":
         _log(f"DENIED: {command!r} ({decision.reason or 'policy violation'})")
         return {
@@ -179,6 +207,9 @@ def _execute(request: dict) -> dict:
         return _error(f"ERROR: '{tool}' not found on host PATH")
 
     # ── 4. Execute ────────────────────────────────────────────────────────
+    # stdin=DEVNULL: commands that try to prompt (passwords, confirmations)
+    # fail immediately instead of hanging until the timeout.
+    timeout = _exec_timeout()
     try:
         result = subprocess.run(
             [real_binary] + args,
@@ -186,11 +217,19 @@ def _execute(request: dict) -> dict:
             cwd=workdir,
             capture_output=True,
             text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
         )
         return {
             "stdout": result.stdout,
             "stderr": result.stderr,
             "exit_code": result.returncode,
         }
+    except subprocess.TimeoutExpired:
+        return _error(
+            f"ERROR: {command!r} timed out after {timeout}s and was killed. "
+            "If it legitimately needs longer, raise EXEC_TIMEOUT in "
+            "deploy/server.env."
+        )
     except Exception as exc:
         return _error(f"ERROR: Execution failed for {command!r}: {exc}")
