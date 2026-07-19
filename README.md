@@ -1,6 +1,9 @@
 # Claude Jail
 
-Authorization, approval workflows, temporary credentials, and audit logging for Claude Code and other coding agents running in Docker containers.
+[![CI](https://github.com/shkrwnd/claude-jail/actions/workflows/ci.yml/badge.svg)](https://github.com/shkrwnd/claude-jail/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
+Docker keeps a coding agent *in* — it doesn't stop it from running `terraform destroy` or `git push --force` with your credentials. Claude Jail adds the missing half: authorization, approval workflows, temporary credentials, and audit logging for Claude Code (or any CLI agent) running in a container.
 
 ## Why Docker Isolation Alone Is Insufficient
 
