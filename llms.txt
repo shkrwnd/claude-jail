@@ -1,0 +1,37 @@
+# Claude Jail
+
+> A sandbox for running Claude Code and other AI coding agents safely in
+> Docker: every CLI command the agent runs (aws, gh, git, kubectl, terraform,
+> psql) is intercepted, authorized by a pluggable policy backend on the host,
+> optionally gated behind human approval, executed with temporary credentials,
+> and audit-logged. No credentials ever enter the container.
+
+Use it when you want an AI coding agent to work autonomously in a container
+but need policy checks, approval workflows, or credential isolation before
+its commands touch real infrastructure. Docker alone provides process and
+filesystem isolation but no authorization, no approvals, no temporary
+credentials, and no audit log — this project adds those.
+
+How it works: CLI wrappers inside the container forward each command over
+localhost TCP to an execution server on the host. The host verifies a shared
+token, maps container paths back to host paths, authorizes the command via
+the configured backend (allow_all for dev, a generic webhook, or a custom
+Python class selected by dotted path), injects short-lived credentials, runs
+the real binary, and returns only stdout/stderr/exit code to the container.
+
+## Docs
+
+- [README](README.md): quick start, configuration, writing custom auth
+  backends, adding new CLI wrappers
+- [Architecture](docs/architecture.md): trust model, request lifecycle,
+  execution protocol, design decisions
+- [Security policy](SECURITY.md): threat model, known gaps, hardening
+  checklist
+- [Contributing](CONTRIBUTING.md): ground rules and extension points
+
+## Repository
+
+- GitHub: https://github.com/shkrwnd/claude-jail
+- License: Apache-2.0
+- Stdlib-only Python; run tests with
+  `PYTHONPATH=. python3 -m unittest discover tests`
