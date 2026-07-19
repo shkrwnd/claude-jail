@@ -54,6 +54,8 @@ class WebhookBackend(AuthBackend):
     and returning {status, reason?, request_id?, approver?}.
     """
 
+    required_env = ("AUTH_WEBHOOK_URL",)
+
     def __init__(self) -> None:
         url = os.environ.get("AUTH_WEBHOOK_URL", "").rstrip("/")
         if not url:

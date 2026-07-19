@@ -35,6 +35,8 @@ class OuthoraBackend(AuthBackend):
     carrying the single-use approval_token for credential issuance.
     """
 
+    required_env = ("OUTHORA_AGENT_ID", "OUTHORA_AGENT_SECRET", "OUTHORA_DEPT_ID")
+
     def __init__(self) -> None:
         self._client = OuthoraClient()
 

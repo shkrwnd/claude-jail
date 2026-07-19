@@ -77,6 +77,21 @@ class TestBackendFactory(unittest.TestCase):
             REGISTRY.clear()
             REGISTRY.update(original)
 
+    def test_dotted_path_selects_custom_backend(self):
+        """AUTH_BACKEND may be a dotted import path — no registry edit needed."""
+        backend = get_auth_backend("server.auth_backends.allow_all.AllowAllBackend")
+        self.assertIsInstance(backend, AllowAllBackend)
+
+    def test_dotted_path_to_missing_module_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            get_auth_backend("no_such_pkg.NoSuchBackend")
+        self.assertIn("no_such_pkg", str(ctx.exception))
+
+    def test_dotted_path_to_non_backend_raises(self):
+        """Resolving to something that isn't an AuthBackend subclass fails."""
+        with self.assertRaises(ValueError):
+            get_auth_backend("json.JSONDecoder")
+
     def test_is_abstract(self):
         """AuthBackend cannot be instantiated directly."""
         with self.assertRaises(TypeError):

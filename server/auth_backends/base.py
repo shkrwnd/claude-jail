@@ -46,6 +46,11 @@ class AuthBackend(ABC):
                 return AuthDecision(status="approved" if ok else "denied")
     """
 
+    # Env vars this backend needs (no defaults — typically secrets set in
+    # deploy/server.env). Checked at server startup; missing vars abort boot
+    # with a clear error instead of failing on the first request.
+    required_env: tuple[str, ...] = ()
+
     @abstractmethod
     def authorize(
         self,

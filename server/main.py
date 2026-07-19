@@ -29,19 +29,12 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import server.handler as handler  # noqa: E402
+from server.auth_backends import get_backend_class  # noqa: E402
 
 _DEFAULT_PORT = 8377
 _DEFAULT_ENV = os.path.join(_ROOT, "deploy", "server.env")
 _DEFAULTS_ENV = os.path.join(_ROOT, "deploy", "server.defaults.env")
 _TOKEN_FILE = os.path.join(_ROOT, "deploy", "exec.token")
-
-# Env vars each auth backend requires (no defaults exist for these — they are
-# secrets and must be set in deploy/server.env).
-_REQUIRED_ENV = {
-    "outhora": ("OUTHORA_AGENT_ID", "OUTHORA_AGENT_SECRET", "OUTHORA_DEPT_ID"),
-    "webhook": ("AUTH_WEBHOOK_URL",),
-    "allow_all": (),
-}
 
 
 class ExecutionHandler(http.server.BaseHTTPRequestHandler):
@@ -113,10 +106,16 @@ def _load_env_file(path: str) -> None:
 
 
 def _missing_backend_env() -> tuple[str, list[str]]:
-    """Return (backend, missing required env vars) for the configured backend."""
+    """Return (backend, missing required env vars) for the configured backend.
+
+    Each backend declares its needs via the `required_env` class attribute
+    (see server/auth_backends/base.py) — custom backends get the same
+    startup validation as built-in ones. Raises ValueError if AUTH_BACKEND
+    does not resolve to a backend class.
+    """
     backend = os.environ.get("AUTH_BACKEND") or "allow_all"
-    required = _REQUIRED_ENV.get(backend, ())
-    return backend, [key for key in required if not os.environ.get(key)]
+    cls = get_backend_class(backend)
+    return backend, [key for key in cls.required_env if not os.environ.get(key)]
 
 
 def main() -> None:
@@ -137,7 +136,11 @@ def main() -> None:
         print("[server]   sh deploy/create-configs.sh", flush=True)
         sys.exit(1)
 
-    backend, missing = _missing_backend_env()
+    try:
+        backend, missing = _missing_backend_env()
+    except ValueError as exc:
+        print(f"[server] ERROR: {exc}", flush=True)
+        sys.exit(1)
     if missing:
         print(f"[server] ERROR: AUTH_BACKEND={backend} requires "
               f"{', '.join(missing)} — set them in deploy/server.env.", flush=True)

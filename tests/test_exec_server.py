@@ -112,6 +112,21 @@ class TestBackendEnvValidation(unittest.TestCase):
             _, missing = server_main._missing_backend_env()
         self.assertEqual(missing, ["AUTH_WEBHOOK_URL"])
 
+    def test_dotted_path_backend_required_env_is_validated(self):
+        """Custom backends selected by dotted path get startup validation too."""
+        env = {
+            "AUTH_BACKEND": "server.auth_backends.webhook.WebhookBackend",
+            "AUTH_WEBHOOK_URL": "",
+        }
+        with unittest.mock.patch.dict(os.environ, env):
+            _, missing = server_main._missing_backend_env()
+        self.assertEqual(missing, ["AUTH_WEBHOOK_URL"])
+
+    def test_unknown_backend_raises_at_startup(self):
+        with unittest.mock.patch.dict(os.environ, {"AUTH_BACKEND": "bogus"}):
+            with self.assertRaises(ValueError):
+                server_main._missing_backend_env()
+
 
 if __name__ == "__main__":
     unittest.main()

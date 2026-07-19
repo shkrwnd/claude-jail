@@ -167,23 +167,40 @@ How it works:
   environment of the executed command; override it to inject temporary
   credentials (the default passes the host environment through).
 
-Register it and select it in `deploy/server.env`:
-
-```python
-# in server/auth_backends/__init__.py
-REGISTRY["static_policy"] = "server.auth_backends.static_policy.StaticPolicyBackend"
-```
+Select it in `deploy/server.env` by its dotted path — no registry edit needed:
 
 ```bash
 # deploy/server.env
-AUTH_BACKEND=static_policy
+AUTH_BACKEND=server.auth_backends.static_policy.StaticPolicyBackend
 ```
+
+(Any `AUTH_BACKEND` value containing a `.` is treated as a dotted import
+path, so your backend can live in any importable package.) If your backend
+needs configuration, declare it as a `required_env` class attribute —
+`required_env = ("MY_API_KEY",)` — and the server refuses to start with a
+clear error when it's missing, instead of failing on the first request.
 
 Restart the server (`./start.sh stop && ./start.sh`) — no container rebuild
 needed. A word of caution: prefix matching is a demonstration, not a security
 boundary — e.g. `git -c core.sshCommand=... push` doesn't start with
 `git push`, and `kubectl get` also matches `kubectl get secrets`. Robust
 policies must inspect `args`, not just the command string.
+
+### Adding a New Wrapper
+
+A wrapper is a three-line shim. To intercept another CLI (say `docker`),
+create `wrappers/docker`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+exec "$(dirname "${BASH_SOURCE[0]}")/agent-exec" "docker" "$@"
+```
+
+Rebuild the container (`./start.sh`) and every `docker` invocation is now
+routed through the execution server — your auth backend sees it as
+`tool="docker"` with the full argument list. The real binary must exist on
+the **host** PATH (commands execute there, not in the container).
 
 ### Temporary Credentials
 
@@ -194,7 +211,7 @@ No static credentials are mounted into the container. On each authorized action,
 | aws | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` |
 | gh | `GH_TOKEN`, `GITHUB_TOKEN` |
 | git | None — uses SSH/HTTPS configured on the host |
-| kubectl | `--token` flag, `--server` flag |
+| kubectl | `KUBECONFIG` pointing at a temporary kubeconfig file |
 | terraform | AWS env vars + `TF_TOKEN_app_terraform_io` |
 | psql | `PGPASSWORD`, `PGUSER`, `PGHOST`, `PGDATABASE` |
 

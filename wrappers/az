@@ -1,9 +1,3 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-# az login/logout require interactive browser auth — pass through directly.
-if [[ "${1:-}" == "login" || "${1:-}" == "logout" ]]; then
-    exec /usr/bin/az "$@"
-fi
-
 exec "$(dirname "${BASH_SOURCE[0]}")/agent-exec" "az" "$@"

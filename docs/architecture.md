@@ -121,12 +121,13 @@ class AuthBackend(ABC):
 - `execution_env` supplies the subprocess environment — override it to inject
   short-lived, action-scoped credentials instead of the host environment.
 
-Backends are registered in `server/auth_backends/__init__.py` as lazy dotted
-paths (`REGISTRY["name"] = "module.ClassName"`) and selected via
-`AUTH_BACKEND` in `deploy/server.env`. The default is `allow_all`. At
-startup, `server/main.py` validates that the selected backend's required env
-vars (`_REQUIRED_ENV`) are present and exits with a clear error if not —
-misconfiguration fails at boot, not at first request.
+Built-in backends are registered in `server/auth_backends/__init__.py` as
+lazy dotted paths (`REGISTRY["name"] = "module.ClassName"`); custom backends
+skip the registry entirely — set `AUTH_BACKEND` to the dotted path directly
+(`AUTH_BACKEND=mypkg.mymodule.MyBackend`). The default is `allow_all`. At
+startup, `server/main.py` resolves the backend class and validates its
+`required_env` class attribute, exiting with a clear error if anything is
+missing — misconfiguration fails at boot, not at first request.
 
 The README's "Writing a Custom Backend" section has a worked example.
 

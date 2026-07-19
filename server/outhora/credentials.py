@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from typing import Any
 
 from server.outhora.models import CredentialResponse
@@ -29,11 +30,17 @@ def inject_gh_credentials(creds: CredentialResponse, env: dict[str, str]) -> dic
 
 
 def inject_kubectl_credentials(creds: CredentialResponse, env: dict[str, str]) -> dict[str, str]:
-    """Inject Kubernetes credentials into environment."""
+    """Inject Kubernetes credentials into environment.
+
+    kubectl only reads credentials from a kubeconfig file (KUBECONFIG) or
+    command-line flags — there is no token env var. So the temporary
+    kubeconfig is written to a private temp file for this one execution.
+    """
     if creds.extra.get("kubeconfig_data"):
-        env["KUBECONFIG_DATA"] = creds.extra["kubeconfig_data"]
-    if creds.extra.get("kube_token"):
-        env["KUBE_TOKEN"] = creds.extra["kube_token"]
+        fd, path = tempfile.mkstemp(prefix="kubeconfig-", suffix=".yaml")
+        with os.fdopen(fd, "w") as f:  # mkstemp creates the file mode 0600
+            f.write(creds.extra["kubeconfig_data"])
+        env["KUBECONFIG"] = path
     return env
 
 
