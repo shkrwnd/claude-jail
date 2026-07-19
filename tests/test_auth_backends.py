@@ -97,6 +97,41 @@ class TestBackendFactory(unittest.TestCase):
         with self.assertRaises(TypeError):
             AuthBackend()  # type: ignore
 
+
+class TestStaticPolicyBackend(unittest.TestCase):
+    """The README's worked example, shipped as static_policy.py."""
+
+    def setUp(self):
+        from server.auth_backends.static_policy import StaticPolicyBackend
+        self.backend = StaticPolicyBackend()
+
+    def _authorize(self, command):
+        parts = command.split()
+        return self.backend.authorize(tool=parts[0], command=command, args=parts[1:])
+
+    def test_allowed_prefix_is_approved(self):
+        self.assertEqual(self._authorize("git status").status, "approved")
+
+    def test_denied_prefix_is_denied(self):
+        decision = self._authorize("terraform destroy -auto-approve")
+        self.assertEqual(decision.status, "denied")
+        self.assertIn("deny list", decision.reason)
+
+    def test_deny_is_checked_first(self):
+        # "git push --force" is denied even though "git" commands appear in ALLOWED
+        decision = self._authorize("git push --force origin main")
+        self.assertEqual(decision.status, "denied")
+
+    def test_unlisted_command_fails_closed(self):
+        decision = self._authorize("rm -rf /")
+        self.assertEqual(decision.status, "denied")
+        self.assertIn("not on the allow list", decision.reason)
+
+    def test_selectable_by_dotted_path(self):
+        from server.auth_backends.static_policy import StaticPolicyBackend
+        backend = get_auth_backend("server.auth_backends.static_policy.StaticPolicyBackend")
+        self.assertIsInstance(backend, StaticPolicyBackend)
+
     def test_env_var_selects_backend(self):
         """AUTH_BACKEND env var selects the backend."""
         with patch.dict(os.environ, {"AUTH_BACKEND": "allow_all"}):
