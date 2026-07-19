@@ -122,6 +122,19 @@ class TestDecisionHandling(unittest.TestCase):
         self.assertEqual(result["exit_code"], 1)
         self.assertIn("DENIED: not allowed", result["stderr"])
 
+    def test_denied_without_reason_hints_agent_reason(self):
+        from server.auth_backends.base import AuthDecision
+        result = self._execute(AuthDecision(status="denied", reason="not allowed"))
+        self.assertIn("AGENT_REASON", result["stderr"])
+
+    def test_denied_with_reason_has_no_hint(self):
+        from server.auth_backends.base import AuthDecision
+        result = self._execute(
+            AuthDecision(status="denied", reason="not allowed"),
+            {"tool": "git", "args": ["status"], "reason": "checking state"},
+        )
+        self.assertNotIn("AGENT_REASON", result["stderr"])
+
     def test_approved_executes(self):
         from server.auth_backends.base import AuthDecision
         result = self._execute(

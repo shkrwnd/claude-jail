@@ -173,6 +173,14 @@ def _execute(request: dict) -> dict:
     except Exception as exc:
         return _error(f"ERROR: Authorization failed for {command!r}: {exc}")
 
+    # Teach the AGENT_REASON convention at the point of need: approvers see
+    # the reason, so a missing one is worth flagging on any non-approval.
+    reason_hint = (
+        "" if reason else
+        " (Tip: set AGENT_REASON=\"why you are running this\" before the "
+        "command — approvers see it.)"
+    )
+
     if decision.status == "pending":
         # Not a denial: a human simply hasn't approved yet. Tell the agent
         # explicitly so it can inform the user and retry instead of giving up.
@@ -185,7 +193,7 @@ def _execute(request: dict) -> dict:
                 f"PENDING APPROVAL: {command!r} requires human approval and has "
                 f"not been approved yet{detail}{ref}. "
                 "Tell the user an approval is waiting, then retry the command "
-                "once it has been granted."
+                f"once it has been granted.{reason_hint}"
             ),
             "exit_code": 1,
         }
@@ -194,7 +202,7 @@ def _execute(request: dict) -> dict:
         _log(f"DENIED: {command!r} ({decision.reason or 'policy violation'})")
         return {
             "stdout": "",
-            "stderr": f"DENIED: {decision.reason or 'policy violation'}",
+            "stderr": f"DENIED: {decision.reason or 'policy violation'}{reason_hint}",
             "exit_code": 1,
         }
 

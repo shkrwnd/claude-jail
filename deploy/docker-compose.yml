@@ -26,7 +26,10 @@ services:
 
     stdin_open: true
     tty: true
-    command: /bin/bash
+    # Refresh the global Claude Code instructions on every start: the
+    # persistent "claude" volume shadows /home/agent/.claude, so the image
+    # copy at /opt/agent/CLAUDE.md is synced in before the shell starts.
+    command: /bin/bash -c "mkdir -p /home/agent/.claude && cp /opt/agent/CLAUDE.md /home/agent/.claude/CLAUDE.md; exec /bin/bash"
 
     volumes:
       # Mount workspace only — NO credential files
