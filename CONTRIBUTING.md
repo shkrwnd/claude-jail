@@ -27,10 +27,10 @@ No dependencies to install. CI runs the same command on every PR.
 You usually don't need to touch core code:
 
 - **Custom auth backend** — one class, selected via a dotted path in
-  `AUTH_BACKEND=mypkg.MyBackend`. See "Writing a Custom Backend" in the
-  README.
-- **New CLI wrapper** — a three-line shim in `wrappers/`. See "Adding a New
-  Wrapper" in the README.
+  `AUTH_BACKEND=mypkg.MyBackend`.
+- **New CLI wrapper** — a three-line shim in `wrappers/`.
+
+Both are walked through in [docs/extending.md](docs/extending.md).
 
 PRs adding generally useful backends or wrappers are welcome.
 

@@ -129,7 +129,7 @@ startup, `server/main.py` resolves the backend class and validates its
 `required_env` class attribute, exiting with a clear error if anything is
 missing — misconfiguration fails at boot, not at first request.
 
-The README's "Writing a Custom Backend" section has a worked example.
+[extending.md](extending.md) has a worked example.
 
 ## Configuration Layering
 

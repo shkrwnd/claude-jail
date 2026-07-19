@@ -21,8 +21,9 @@ the real binary, and returns only stdout/stderr/exit code to the container.
 
 ## Docs
 
-- [README](README.md): quick start, configuration, writing custom auth
-  backends, adding new CLI wrappers
+- [README](README.md): quick start, configuration, auth backends
+- [Extending](docs/extending.md): writing custom auth backends, adding new
+  CLI wrappers, temporary credential injection
 - [Architecture](docs/architecture.md): trust model, request lifecycle,
   execution protocol, design decisions
 - [Security policy](SECURITY.md): threat model, known gaps, hardening

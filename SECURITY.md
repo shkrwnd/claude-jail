@@ -40,8 +40,9 @@ These are documented, accepted limitations with mitigation plans tracked in
   applies it yet.
 - **The default `allow_all` backend approves everything** — by design, for
   local development. Production use requires configuring a real backend.
-- The `StaticPolicyBackend` example in the README uses prefix matching and is
-  explicitly documented as a demonstration, not a security boundary.
+- The `StaticPolicyBackend` example (see [docs/extending.md](docs/extending.md))
+  uses prefix matching and is explicitly documented as a demonstration, not a
+  security boundary.
 
 ## Hardening Checklist for Deployers
 
