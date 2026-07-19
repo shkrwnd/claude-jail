@@ -1,0 +1,16 @@
+# Egress allowlist — domains the container may reach via the proxy.
+# One extended regex per line, matched against the CONNECT target or Host header.
+# FilterDefaultDeny is ON, so anything not listed here is blocked.
+#
+# Edit this file and restart the proxy (./start.sh stop && ./start.sh) to apply.
+
+# Claude Code — required for the agent to function
+^.*\.anthropic\.com(:[0-9]+)?$
+^.*\.claude\.com(:[0-9]+)?$
+^sentry\.io(:[0-9]+)?$
+
+# Package registries — for pip install / npm install inside the container
+^pypi\.org(:[0-9]+)?$
+^files\.pythonhosted\.org(:[0-9]+)?$
+^registry\.npmjs\.org(:[0-9]+)?$
+

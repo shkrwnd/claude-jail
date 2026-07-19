@@ -11,8 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code globally
-RUN npm install -g @anthropic-ai/claude-code
+# Install Claude Code + proxy support (makes Node respect HTTPS_PROXY env var)
+RUN npm install -g @anthropic-ai/claude-code https-proxy-agent http-proxy-agent
 
 # Install wrappers — read-only to prevent Claude from modifying them.
 # This is ALL the container gets: shell shims + agent-exec + exec_client.py.
@@ -36,9 +36,14 @@ RUN userdel -r node \
 
 # Global Claude Code instructions: teaches the agent to set AGENT_REASON and
 # how to handle PENDING APPROVAL / DENIED responses, in every workspace.
-# Copied into ~/.claude/CLAUDE.md at container start (see docker-compose.yml)
-# because the persistent "claude" volume shadows anything baked in there.
+# Baked into ~/.claude so a FRESH "claude" volume is seeded agent-owned with
+# the file present; also kept at /opt/agent/CLAUDE.md so the container start
+# command (see docker-compose.yml) can re-sync updates into EXISTING volumes.
 COPY --chown=1000:1000 deploy/agent-claude.md /opt/agent/CLAUDE.md
+COPY deploy/proxy-bootstrap.js /opt/agent/proxy-bootstrap.js
+RUN mkdir -p /home/agent/.claude \
+    && cp /opt/agent/CLAUDE.md /home/agent/.claude/CLAUDE.md \
+    && chown -R 1000:1000 /home/agent/.claude
 
 USER agent
 

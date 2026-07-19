@@ -1,10 +1,45 @@
+networks:
+  # Internal network: no direct internet access. The claude container lives
+  # here and can only reach the sidecar (proxy, DNS, exec relay).
+  jail:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+  # External network: has internet. The sidecar bridges jail to the outside.
+  egress:
+
 services:
-  # Config files are created from *.example templates by deploy/create-configs.sh
-  # (start.sh runs it automatically; run it manually before a raw `docker compose up`).
+  # ── Sidecar ──────────────────────────────────────────────────────────────
+  # Single container providing three services to the jail network:
+  #   - tinyproxy (8888): domain-filtered egress proxy
+  #   - dnsmasq (53): DNS forwarder (internal network blocks external DNS)
+  #   - socat (8377): TCP relay to host execution server
+  # Edit deploy/sidecar/allowlist and restart to change allowed domains.
+  sidecar:
+    build:
+      context: ./sidecar
+    networks:
+      jail:
+        ipv4_address: 172.28.0.53
+      egress:
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    cap_add:
+      - NET_BIND_SERVICE
+    restart: unless-stopped
+
+  # ── Agent container ──────────────────────────────────────────────────────
   claude:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+    depends_on:
+      sidecar:
+        condition: service_started
+
+    networks: [jail]
+    dns: 172.28.0.53
 
     env_file:
       # Later files win: user overrides beat committed defaults
@@ -16,13 +51,15 @@ services:
     environment:
       # Ensure wrappers take precedence
       PATH: /opt/agent/bin:/usr/local/bin:/usr/bin:/bin
-      # Execution server endpoint on the host (TCP — Docker Desktop cannot
-      # reliably share Unix sockets between macOS host and container)
-      EXEC_SERVER: host.docker.internal:8377
-
-    extra_hosts:
-      # Make host.docker.internal work on Linux too (no-op on Docker Desktop)
-      - host.docker.internal:host-gateway
+      # Execution server endpoint (via sidecar relay)
+      EXEC_SERVER: sidecar:8377
+      # All HTTP(S) traffic goes through the egress proxy.
+      # global-agent makes Node.js (Claude Code) respect these env vars.
+      HTTPS_PROXY: http://sidecar:8888
+      HTTP_PROXY: http://sidecar:8888
+      NODE_OPTIONS: --require /opt/agent/proxy-bootstrap.js
+      # Don't proxy traffic to internal services (exec relay is plain HTTP on jail network)
+      NO_PROXY: sidecar
 
     stdin_open: true
     tty: true
@@ -36,8 +73,6 @@ services:
       - ${WORKSPACE_DIR:-../workspace}:/workspace:rw
       # Persist Claude auth token and settings across rebuilds
       - claude:/home/agent/.claude
-      # Egress allowlist
-      - ./egress-config.json:/etc/agent/egress-config.json:ro
 
     working_dir: /workspace
 

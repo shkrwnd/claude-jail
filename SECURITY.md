@@ -36,8 +36,11 @@ These are documented, accepted limitations with mitigation plans tracked in
   config-driven code execution (git hooks, `core.fsmonitor`, terraform
   provider plugins, `.psqlrc`) can run agent code on the host. Planned fix:
   config neutralization, then a disposable executor container.
-- **Egress is not enforced** — `deploy/egress-config.json` exists but nothing
-  applies it yet.
+- **Egress filtering is domain-based, not port-based** — the tinyproxy
+  allowlist controls which domains the container can HTTPS to, but the
+  container can still reach the sidecar on any port via `NO_PROXY`. The
+  sidecar only exposes specific services (proxy, DNS, exec relay) but
+  a compromised sidecar would bridge to the host.
 - **The default `allow_all` backend approves everything** — by design, for
   local development. Production use requires configuring a real backend.
 - The `StaticPolicyBackend` example (see [docs/extending.md](docs/extending.md))

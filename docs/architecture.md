@@ -155,6 +155,14 @@ sockets hit stale inodes and `EOPNOTSUPP`. Loopback TCP with a shared-secret
 token works identically everywhere. The server binds `127.0.0.1` only and is
 never exposed to the network.
 
+**Egress filtering.** The container lives on an `internal: true` Docker
+network — no direct internet. A single sidecar container (`deploy/sidecar/`)
+sits on both the internal and external networks, providing three services:
+tinyproxy (domain-filtered HTTPS proxy), dnsmasq (DNS forwarding), and socat
+(TCP relay to the host execution server). The proxy allowlists domains by
+CONNECT target, blocking token exfiltration to arbitrary servers while
+letting Claude Code reach its API.
+
 **Why execute on the host.** Credentials must never enter the container, so
 the command that needs them must run where they live. The trade-off is that
 host execution of agent-controlled workspaces is itself an escape vector

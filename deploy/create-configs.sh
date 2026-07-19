@@ -21,7 +21,6 @@ create_from_template() {
   fi
 }
 
-create_from_template "egress-config.json" "egress-config.example.json" "Edit it to customize allowed domains."
 create_from_template "docker-compose.override.yml" "docker-compose.override.example.yml" \
   "Add folders there to make them available to Claude under /workspace/."
 

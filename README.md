@@ -97,7 +97,8 @@ The server fails at startup with a clear error if the chosen backend is missing 
 
 - **Credential isolation** — the container image contains only the wrappers and the protocol client; auth backend selection and credentials live in `deploy/server.env` on the host, never mounted into the container
 - **Request authentication** — the server only accepts requests carrying the shared secret from `deploy/exec.token`; other processes or containers reaching `127.0.0.1:8377` are rejected
-- **Loopback only** — the server binds to 127.0.0.1; the container reaches it via `host.docker.internal`. Never exposed to the network
+- **Egress filtering** — the container lives on an `internal: true` Docker network with no direct internet access; all outbound HTTPS goes through a tinyproxy allowlist (`deploy/sidecar/allowlist`). Exfiltrating stolen tokens to arbitrary domains is blocked
+- **Loopback only** — the execution server binds to 127.0.0.1; the container reaches it via a socat relay in the sidecar. Never exposed to the network
 - **Container hardening** — `cap_drop: ALL`, `no-new-privileges`, seccomp profile, memory/pid limits, non-root user (UID 1000)
 - **Never mount** `~/.aws`, `~/.ssh`, `~/.kube`, `~/.docker`, `~/.config/gh` — all credentials are managed by the execution server on the host
 
