@@ -3,6 +3,7 @@
 #
 #   ./start.sh          start execution server + container, drop into a shell
 #   ./start.sh stop     stop container and execution server
+#   ./start.sh clean    stop + delete all images, volumes, and orphan containers
 #   ./start.sh logs     tail the execution server log
 #
 # The server listens on TCP 127.0.0.1:$PORT; the container reaches it via
@@ -85,8 +86,17 @@ cmd_stop() {
     log "Done."
 }
 
+cmd_clean() {
+    log "Stopping container..."
+    "${COMPOSE[@]}" down --rmi all --volumes --remove-orphans
+    stop_server
+    log "Cleaned up project images, volumes, and containers."
+}
+
 cmd_logs() {
-    exec tail -f "$SERVER_LOG"
+    # Stream execution server + container logs together
+    tail -f "$SERVER_LOG" &
+    "${COMPOSE[@]}" logs -f 2>&1 | sed 's/^/[proxy] /'
 }
 
 # Ensure all config files exist (incl. the override file COMPOSE references)
@@ -94,8 +104,15 @@ cmd_logs() {
 sh "$ROOT/deploy/create-configs.sh"
 
 case "${1:-start}" in
-    start) cmd_start ;;
-    stop)  cmd_stop ;;
-    logs)  cmd_logs ;;
-    *)     echo "Usage: ./start.sh [start|stop|logs]"; exit 2 ;;
+    start)       cmd_start ;;
+    stop)        cmd_stop ;;
+    clean)       cmd_clean ;;
+    logs)        cmd_logs ;;
+    -h|--help|help) echo "Usage: ./start.sh [start|stop|clean|logs]"
+                    echo ""
+                    echo "  start   Start execution server + container, drop into a shell (default)"
+                    echo "  stop    Stop container and execution server"
+                    echo "  clean   Stop + delete all project images, volumes, and orphan containers"
+                    echo "  logs    Tail the execution server log" ;;
+    *)           echo "Usage: ./start.sh [start|stop|clean|logs]"; exit 2 ;;
 esac

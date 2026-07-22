@@ -11,5 +11,9 @@ dnsmasq --no-daemon --no-resolv --server=8.8.8.8 --server=8.8.4.4 \
 # Exec relay — forwards port 8377 to the host execution server
 socat TCP-LISTEN:8377,fork,reuseaddr TCP:host.docker.internal:8377 &
 
+# Tail proxy log to stdout so `docker compose logs` picks it up
+touch /var/log/tinyproxy.log
+tail -f /var/log/tinyproxy.log &
+
 # Egress proxy — domain-filtered forward proxy (foreground)
 exec tinyproxy -d

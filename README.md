@@ -5,7 +5,93 @@
 
 ![Claude Jail demo — safe commands pass, destructive commands are denied by host-side policy](docs/demo.gif)
 
-A sandbox for running Claude Code and other AI coding agents safely in Docker. Docker keeps an agent *in* — it doesn't stop it from running `terraform destroy` or `git push --force` with your credentials. Claude Jail adds the missing half: authorization, human approval workflows, temporary credentials, and audit logging for every CLI command the agent runs (`aws`, `gh`, `git`, `kubectl`, `terraform`, `psql`, ...).
+A sandbox for running Claude Code and other AI coding agents safely in Docker. Docker keeps an agent *in* — it doesn't stop it from running `terraform destroy` or `git push --force` with your credentials. Claude Jail adds the missing half: authorization, credential isolation, and audit logging for every CLI command the agent runs (`aws`, `gh`, `git`, `kubectl`, `terraform`, `psql`, ...).
+
+## Usage
+
+Everything is managed through `start.sh`:
+
+| Command | Description |
+|---------|-------------|
+| `./start.sh` | Start the execution server + container and drop into a shell |
+| `./start.sh stop` | Stop the container and execution server |
+| `./start.sh clean` | Stop + delete all project images, volumes, and orphan containers |
+| `./start.sh logs` | Tail the execution server log |
+| `./start.sh --help` | Show available commands |
+
+Once inside the container, run `claude` to start Claude Code. All CLI commands (aws, git, kubectl, etc.) are intercepted by wrappers and routed to the host-side execution server for authorization.
+
+### Mounting your project folders
+
+Add volume lines to the gitignored `deploy/docker-compose.override.yml` to give Claude Code access to your folders:
+
+```yaml
+services:
+  claude:
+    volumes:
+      - /path/to/project:/workspace/project:rw        # rw: Claude can edit
+      - /path/to/docs:/workspace/docs:ro              # ro: read-only
+```
+
+Inside the container, Claude sees your folders under `/workspace/`. The execution server maps container paths back to host paths automatically — no other configuration needed. Only folders explicitly listed in this file are accessible to Claude Code — nothing else from the host is mounted into the container.
+
+### Egress allowlist
+
+The container has no direct internet access. All outbound HTTPS goes through a domain-filtered proxy. Edit `deploy/sidecar/allowlist` to control which domains the container can reach:
+
+```
+# Currently allowed — one regex per line
+^.*\.anthropic\.com(:[0-9]+)?$    # Claude API
+^.*\.claude\.com(:[0-9]+)?$       # Claude platform
+^sentry\.io(:[0-9]+)?$            # Error reporting
+^pypi\.org(:[0-9]+)?$             # Python packages
+^registry\.npmjs\.org(:[0-9]+)?$  # npm packages
+^github\.com(:[0-9]+)?$           # GitHub
+^api\.github\.com(:[0-9]+)?$      # GitHub API
+```
+
+After editing, restart with `./start.sh stop && ./start.sh` to apply.
+
+### Authorization backend
+
+By default all commands are approved (`allow_all`). To control what the agent can execute, set a policy in `deploy/server.env`:
+
+```
+AUTH_BACKEND=server.auth_backends.static_policy.StaticPolicyBackend
+```
+
+The included static policy backend uses simple allow/deny lists:
+
+```python
+ALLOWED = (
+    "git status", "git log", "git diff", "git commit",
+    "aws s3 ls",
+    "kubectl get",
+)
+DENIED = (
+    "git push --force",
+    "terraform destroy",
+    "kubectl delete",
+)
+```
+
+Commands matching `DENIED` are rejected, commands matching `ALLOWED` pass through, everything else is denied (fail-closed). Edit `server/auth_backends/static_policy.py` to customize.
+
+To authorize with your own backend (REST API, Slack bot, OPA, etc.), extend `AuthBackend`:
+
+```python
+from server.auth_backends.base import AuthBackend, AuthDecision
+
+class MyBackend(AuthBackend):
+    required_env = ("MY_API_KEY",)  # checked at startup
+
+    def authorize(self, tool, command, args, reason="", repo="", branch=""):
+        ok = call_my_api(tool, command)
+        return AuthDecision(status="approved" if ok else "denied",
+                            reason="Policy check failed")
+```
+
+Set `AUTH_BACKEND=my_module.MyBackend` in `deploy/server.env` and restart. See [docs/extending.md](docs/extending.md) for details.
 
 ## Why Docker Isolation Alone Is Insufficient
 
@@ -37,46 +123,16 @@ CONTAINER (untrusted)                         HOST (trusted)
 
 The intent: **bypassing the sandbox must gain nothing.** If the agent deletes the wrappers or opens the TCP connection itself, it just reaches the same execution server, which authorizes on the host using policy the container cannot see or influence. Details in [docs/architecture.md](docs/architecture.md).
 
-## Quick Start
-
-```bash
-./start.sh        # starts the execution server, builds/starts the container, opens a shell
-./start.sh stop   # tears everything down
-./start.sh logs   # tail the execution server log
-```
-
-On first run the script creates all config files, starts the execution server on the host, builds/starts the container, and drops you into a container shell — just run `claude` there. It works exactly as it does locally: without an `ANTHROPIC_API_KEY` it prompts for browser login (the token persists in the `claude` volume), and any call to `aws`, `az`, `gh`, `git`, `kubectl`, `terraform`, or `psql` is automatically intercepted and routed through the execution server.
-
 ## Configuration
 
 All config lives in `deploy/`, auto-created on first run and never committed. Defaults live in the committed `deploy/*.defaults.env` files — don't edit those, override them in the files below.
 
 | File | Contains |
 |---|---|
-| `deploy/docker-compose.override.yml` | Your workspace folders (see below) |
+| `deploy/docker-compose.override.yml` | Your workspace folders (see above) |
 | `deploy/container.env` | Optional `ANTHROPIC_API_KEY` (otherwise browser login on first run) |
 | `deploy/server.env` | Auth backend credentials — never enters the container. Default: `allow_all` (dev only) |
-
-### Workspace folders (the override file)
-
-By default the container mounts one folder as `/workspace`. To give Claude
-Code access to your folders, add volume lines to the gitignored
-`deploy/docker-compose.override.yml`. Each line means
-`host-path:container-path:mode`:
-
-```yaml
-services:
-  claude:
-    volumes:
-      - /path/to/project:/workspace/project:rw        # rw: Claude can edit
-      - /path/to/docs:/workspace/docs:ro              # ro: read-only
-```
-
-Inside the container, Claude sees your folders under `/workspace/`. The
-execution server reads the same file to map container paths back to host
-paths — when Claude runs `git` in `/workspace/project`, the real command
-executes in `/path/to/project` on the host. No other configuration is
-needed. After editing any config, re-run `./start.sh` to apply it.
+| `deploy/sidecar/allowlist` | Egress proxy domain allowlist (see above) |
 
 ## Auth Backends
 
