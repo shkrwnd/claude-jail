@@ -19,7 +19,7 @@ Everything is managed through `start.sh`:
 | `./start.sh logs` | Tail the execution server log |
 | `./start.sh --help` | Show available commands |
 
-Once inside the container, run `claude` to start Claude Code. All CLI commands (aws, git, kubectl, etc.) are intercepted by wrappers and routed to the host-side execution server for authorization.
+Once inside the container, run `claude` to start Claude Code. All CLI commands (aws, git, kubectl, etc.) are intercepted by wrappers and routed to the host-side execution server for authorization. To add support for other CLI tools, please [open an issue or PR](https://github.com/shkrwnd/claude-jail/issues).
 
 ### Mounting your project folders
 
@@ -143,7 +143,7 @@ The default backend is `allow_all` — every command is approved and runs with t
 | `allow_all` | Approve everything — development and CI only (default) |
 | `webhook` | Generic HTTP webhook — any custom approval service |
 | `server.auth_backends.static_policy.StaticPolicyBackend` | Static allow/deny list — the demo policy |
-| any dotted path | Your own backend class — see below |
+| any dotted path | Your own backend class — see [docs/extending.md](docs/extending.md) |
 
 The server fails at startup with a clear error if the chosen backend is missing required credentials.
 

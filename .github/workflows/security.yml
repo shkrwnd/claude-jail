@@ -1,0 +1,77 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly scan — catches new CVEs in dependencies/base images
+    - cron: "0 8 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  bandit:
+    name: Bandit (Python SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install bandit
+      - name: Run Bandit
+        run: bandit -r server/ sdk/ -f json -o bandit-report.json || true
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.json
+
+  trivy:
+    name: Trivy (image & dependency scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build images
+        run: |
+          docker build -t claude-jail:scan -f deploy/Dockerfile .
+          docker build -t claude-jail-sidecar:scan deploy/sidecar/
+      - name: Scan agent image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: claude-jail:scan
+          format: sarif
+          output: trivy-agent.sarif
+          severity: CRITICAL,HIGH
+      - name: Scan sidecar image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: claude-jail-sidecar:scan
+          format: sarif
+          output: trivy-sidecar.sarif
+          severity: CRITICAL,HIGH
+      - name: Upload agent scan to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-agent.sarif
+          category: trivy-agent
+      - name: Upload sidecar scan to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-sidecar.sarif
+          category: trivy-sidecar
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+      - name: Perform analysis
+        uses: github/codeql-action/analyze@v3

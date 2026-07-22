@@ -129,21 +129,32 @@ def execute(request: dict) -> dict:
     started = time.monotonic()
     result = _execute(request)
 
-    command = " ".join([request.get("tool", "")] + request.get("args", []))
+    tool = request.get("tool", "")
+    args = request.get("args", [])
+    command = f"{tool} {' '.join(args)}" if isinstance(tool, str) and isinstance(args, list) else "<malformed>"
     _log(f"request complete: {command!r} -> exit {result['exit_code']} "
          f"({time.monotonic() - started:.2f}s)")
     return result
 
 
 def _execute(request: dict) -> dict:
-    tool: str = request.get("tool", "")
-    args: list[str] = request.get("args", [])
-    reason: str = request.get("reason", "")
-    repo: str = request.get("repo", "")
-    branch: str = request.get("branch", "")
+    tool = request.get("tool", "")
+    args = request.get("args", [])
+    reason = request.get("reason", "")
+    repo = request.get("repo", "")
+    branch = request.get("branch", "")
 
-    if not tool:
-        return _error("ERROR: 'tool' field is required")
+    # Validate types — malformed requests get a clean 400, not a crash.
+    if not isinstance(tool, str) or not tool:
+        return _error("ERROR: 'tool' must be a non-empty string")
+    if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+        return _error("ERROR: 'args' must be a list of strings")
+    if not isinstance(reason, str):
+        return _error("ERROR: 'reason' must be a string")
+    if not isinstance(repo, str):
+        return _error("ERROR: 'repo' must be a string")
+    if not isinstance(branch, str):
+        return _error("ERROR: 'branch' must be a string")
 
     command = " ".join([tool] + args)
     _log(f"request start: {command!r} (repo={repo}, branch={branch})")
